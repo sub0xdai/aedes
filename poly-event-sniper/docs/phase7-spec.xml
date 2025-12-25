@@ -1,0 +1,455 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<specification>
+  <metadata>
+    <title>Aedes Evolution: General-Purpose Trading System</title>
+    <version>Phase 7</version>
+    <methodology>Middle-Out</methodology>
+    <date>2025-12-25</date>
+  </metadata>
+
+  <context>
+    <overview>
+      Evolve Aedes from a reactive event sniper to a full algorithmic trading system
+      with position tracking, portfolio management, and stateful strategies.
+    </overview>
+
+    <design-decisions>
+      <decision name="position-sides">
+        <value>LONG + SHORT</value>
+        <rationale>Full directional betting support for Polymarket binary markets</rationale>
+      </decision>
+      <decision name="cash-balance">
+        <value>Fetch from Polymarket API on startup</value>
+        <rationale>Real-time accuracy over static configuration</rationale>
+      </decision>
+      <decision name="persistence">
+        <value>Keep JSONL (audit) + SQLite (queries)</value>
+        <rationale>Backward compatibility and audit trail alongside queryable storage</rationale>
+      </decision>
+    </design-decisions>
+
+    <current-architecture>
+      <component name="Orchestrator">Routes events from N ingesters to N parsers to executor</component>
+      <component name="BaseParser">Stateless interface with evaluate() and reset()</component>
+      <component name="TradeLogger">JSONL append-only persistence</component>
+      <component name="SubscriptionManager">Protocol-based dependency injection pattern</component>
+    </current-architecture>
+
+    <target-architecture>
+      <flow>
+        Events (MarketEvent)
+        → Strategies (stateful: on_tick, generate_signals)
+        → PortfolioManager (validates against positions, cash, risk limits)
+        → Executor (enhanced Order model with order_type, time_in_force)
+        → SQLite Persistence (trades, positions, orders tables)
+        → TUI (position view, PnL dashboard)
+      </flow>
+    </target-architecture>
+  </context>
+
+  <instructions>
+    <phase number="1" name="Foundation Models" file="src/models.py">
+      <description>Add new data models without modifying existing interfaces</description>
+      <steps>
+        <step>Add PositionSide enum (LONG, SHORT, FLAT)</step>
+        <step>Add OrderType enum (MARKET, LIMIT, FOK)</step>
+        <step>Add TimeInForce enum (GTC, IOC, FOK)</step>
+        <step>Add Position model with unrealized_pnl and market_value properties</step>
+        <step>Add Order model with client_order_id and full lifecycle tracking</step>
+        <step>Write unit tests for Position PnL calculations</step>
+        <step>Write unit tests for Order validation</step>
+      </steps>
+      <dependencies>None</dependencies>
+    </phase>
+
+    <phase number="2" name="SQLite Persistence" file="src/persistence/database.py">
+      <description>Add persistent storage without replacing JSONL logger</description>
+      <steps>
+        <step>Create src/persistence/ module structure</step>
+        <step>Define SQL schema in src/persistence/schema.py</step>
+        <step>Implement DatabaseManager with aiosqlite</step>
+        <step>Add connect() and disconnect() methods</step>
+        <step>Add trade CRUD operations</step>
+        <step>Add position CRUD operations with upsert</step>
+        <step>Add order lifecycle operations</step>
+        <step>Write tests for all CRUD operations</step>
+        <step>Add aiosqlite to pyproject.toml</step>
+      </steps>
+      <dependencies>Phase 1 models</dependencies>
+    </phase>
+
+    <phase number="3" name="PortfolioManager" file="src/managers/portfolio.py">
+      <description>Centralized position and cash tracking with risk controls</description>
+      <steps>
+        <step>Create PortfolioManager class</step>
+        <step>Implement load_state() to hydrate from database</step>
+        <step>Add get_balance() method to executor for API fetch</step>
+        <step>Implement on_fill() for position updates</step>
+        <step>Implement on_price_update() for mark-to-market</step>
+        <step>Implement check_order() for risk validation</step>
+        <step>Write tests for position calculations</step>
+        <step>Write tests for order rejection scenarios</step>
+      </steps>
+      <dependencies>Phase 2 database</dependencies>
+    </phase>
+
+    <phase number="4" name="Strategy Interface" file="src/interfaces/strategy.py">
+      <description>Replace stateless parsers with stateful strategies</description>
+      <steps>
+        <step>Create BaseStrategy ABC with on_tick, on_fill, generate_signals, reset</step>
+        <step>Add name property for strategy identification</step>
+        <step>Create ParserStrategyAdapter for backward compatibility</step>
+        <step>Write tests for adapter wrapping existing parsers</step>
+        <step>Write tests for signal lifecycle</step>
+      </steps>
+      <dependencies>Phase 1 Order model</dependencies>
+    </phase>
+
+    <phase number="5" name="Orchestrator Integration" file="src/orchestrator.py">
+      <description>Evolve Orchestrator to support both parsers and strategies</description>
+      <steps>
+        <step>Extend constructor to accept strategies and portfolio_manager</step>
+        <step>Wrap legacy parsers with ParserStrategyAdapter</step>
+        <step>Modify event loop to update portfolio prices</step>
+        <step>Add strategy.on_tick() calls</step>
+        <step>Collect and validate orders via portfolio.check_order()</step>
+        <step>Execute valid orders and call on_fill callbacks</step>
+        <step>Persist to database and JSONL</step>
+        <step>Write backward compatibility tests</step>
+        <step>Write integration tests for full flow</step>
+      </steps>
+      <dependencies>Phase 3 and Phase 4</dependencies>
+    </phase>
+
+    <phase number="6" name="TUI Position Panel" file="src/tui/widgets/positions.py">
+      <description>Add position view to existing TUI</description>
+      <steps>
+        <step>Create PositionsPanel widget with DataTable</step>
+        <step>Add columns: Token, Side, Qty, Entry, Current, PnL</step>
+        <step>Implement color-coded PnL (green/red)</step>
+        <step>Extend OrchestratorCallback with on_position_updated</step>
+        <step>Wire into AedesApp layout</step>
+      </steps>
+      <dependencies>Phase 3 PortfolioManager</dependencies>
+    </phase>
+  </instructions>
+
+  <examples>
+    <example name="Position Model">
+      <code language="python"><![CDATA[
+class PositionSide(str, Enum):
+    """Position direction."""
+    LONG = "LONG"
+    SHORT = "SHORT"
+    FLAT = "FLAT"
+
+class Position(BaseModel):
+    """Represents an open position in a market."""
+    model_config = {"frozen": True}
+
+    token_id: str = Field(..., description="Polymarket token ID")
+    side: PositionSide = Field(..., description="LONG/SHORT/FLAT")
+    quantity: float = Field(..., ge=0, description="Number of shares held")
+    avg_entry_price: float = Field(..., ge=0, le=1, description="Average entry price")
+    current_price: float = Field(..., ge=0, le=1, description="Last known market price")
+    opened_at: float = Field(default_factory=time, description="Position open timestamp")
+
+    @property
+    def unrealized_pnl(self) -> float:
+        """Calculate unrealized P&L in USDC."""
+        if self.side == PositionSide.FLAT:
+            return 0.0
+        direction = 1.0 if self.side == PositionSide.LONG else -1.0
+        return direction * self.quantity * (self.current_price - self.avg_entry_price)
+
+    @property
+    def market_value(self) -> float:
+        """Current value of position in USDC."""
+        return self.quantity * self.current_price
+]]></code>
+    </example>
+
+    <example name="Order Model">
+      <code language="python"><![CDATA[
+class OrderType(str, Enum):
+    """Order type for execution."""
+    MARKET = "MARKET"
+    LIMIT = "LIMIT"
+    FOK = "FOK"
+
+class TimeInForce(str, Enum):
+    """Order time-in-force."""
+    GTC = "GTC"
+    IOC = "IOC"
+    FOK = "FOK"
+
+class Order(BaseModel):
+    """Enhanced order model with full lifecycle tracking."""
+    model_config = {"frozen": True}
+
+    client_order_id: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    token_id: str = Field(..., description="Polymarket token ID")
+    side: Side = Field(..., description="BUY/SELL")
+    quantity: float = Field(..., gt=0, description="Number of shares")
+    order_type: OrderType = Field(default=OrderType.FOK)
+    limit_price: float | None = Field(default=None, ge=0, le=1)
+    time_in_force: TimeInForce = Field(default=TimeInForce.FOK)
+    reason: str = Field(..., description="Human-readable reason")
+    created_at: float = Field(default_factory=time)
+]]></code>
+    </example>
+
+    <example name="Database Schema">
+      <code language="sql"><![CDATA[
+CREATE TABLE trades (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id TEXT NOT NULL,
+    client_order_id TEXT,
+    token_id TEXT NOT NULL,
+    side TEXT NOT NULL,
+    quantity REAL NOT NULL,
+    price REAL NOT NULL,
+    fees REAL DEFAULT 0,
+    executed_at REAL NOT NULL,
+    created_at REAL DEFAULT (strftime('%s', 'now'))
+);
+
+CREATE TABLE positions (
+    token_id TEXT PRIMARY KEY,
+    side TEXT NOT NULL,
+    quantity REAL NOT NULL,
+    avg_entry_price REAL NOT NULL,
+    current_price REAL NOT NULL,
+    opened_at REAL NOT NULL,
+    updated_at REAL DEFAULT (strftime('%s', 'now'))
+);
+
+CREATE TABLE orders (
+    client_order_id TEXT PRIMARY KEY,
+    token_id TEXT NOT NULL,
+    side TEXT NOT NULL,
+    quantity REAL NOT NULL,
+    order_type TEXT NOT NULL,
+    limit_price REAL,
+    status TEXT NOT NULL,
+    exchange_order_id TEXT,
+    created_at REAL NOT NULL,
+    updated_at REAL DEFAULT (strftime('%s', 'now'))
+);
+
+CREATE INDEX idx_trades_token ON trades(token_id);
+CREATE INDEX idx_trades_time ON trades(executed_at);
+CREATE INDEX idx_orders_token ON orders(token_id);
+CREATE INDEX idx_orders_status ON orders(status);
+]]></code>
+    </example>
+
+    <example name="PortfolioManager">
+      <code language="python"><![CDATA[
+class PortfolioManager:
+    """Portfolio state management and risk controls."""
+
+    def __init__(
+        self,
+        database: DatabaseManager,
+        max_position_size: float = 500.0,
+        max_positions: int = 10,
+    ):
+        self._database = database
+        self._cash_balance: float = 0.0
+        self._positions: dict[str, Position] = {}
+        self._max_position_size = max_position_size
+        self._max_positions = max_positions
+
+    async def load_state(self, executor: BaseExecutor) -> None:
+        """Load positions from database and fetch cash from exchange."""
+        positions = await self._database.get_all_positions()
+        self._positions = {p.token_id: p for p in positions}
+        self._cash_balance = await executor.get_balance()
+
+    def check_order(self, order: Order) -> tuple[bool, str]:
+        """Validate order against portfolio constraints."""
+        if order.side == Side.BUY:
+            cost = order.quantity * (order.limit_price or 1.0)
+            if cost > self._cash_balance:
+                return False, f"Insufficient cash: {cost} > {self._cash_balance}"
+
+        if order.side == Side.SELL:
+            pos = self._positions.get(order.token_id)
+            if pos is None or pos.quantity < order.quantity:
+                return False, "Insufficient position for sell"
+
+        if order.token_id not in self._positions:
+            if len(self._positions) >= self._max_positions:
+                return False, f"Max positions reached: {self._max_positions}"
+
+        return True, ""
+
+    async def on_fill(self, order: Order, result: ExecutionResult) -> None:
+        """Update positions after a fill."""
+        # Implementation: update position quantity, avg price, persist to DB
+        pass
+
+    async def on_price_update(self, token_id: str, price: float) -> None:
+        """Update mark-to-market for a position."""
+        if token_id in self._positions:
+            old_pos = self._positions[token_id]
+            self._positions[token_id] = Position(
+                token_id=old_pos.token_id,
+                side=old_pos.side,
+                quantity=old_pos.quantity,
+                avg_entry_price=old_pos.avg_entry_price,
+                current_price=price,
+                opened_at=old_pos.opened_at,
+            )
+]]></code>
+    </example>
+
+    <example name="BaseStrategy Interface">
+      <code language="python"><![CDATA[
+class BaseStrategy(ABC):
+    """Stateful trading strategy interface."""
+
+    @abstractmethod
+    def on_tick(self, event: MarketEvent) -> None:
+        """Process a market event. Update internal state."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def on_fill(self, order: Order, result: ExecutionResult) -> None:
+        """Called when an order is filled."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def generate_signals(self) -> list[Order]:
+        """Generate trading orders based on current state."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def reset(self) -> None:
+        """Reset strategy state."""
+        raise NotImplementedError
+
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        """Strategy identifier."""
+        raise NotImplementedError
+]]></code>
+    </example>
+
+    <example name="Parser Adapter">
+      <code language="python"><![CDATA[
+class ParserStrategyAdapter(BaseStrategy):
+    """Adapts existing BaseParser to BaseStrategy interface."""
+
+    def __init__(self, parser: BaseParser):
+        self._parser = parser
+        self._pending_signal: TradeSignal | None = None
+
+    def on_tick(self, event: MarketEvent) -> None:
+        signal = self._parser.evaluate(event)
+        if signal:
+            self._pending_signal = signal
+
+    def on_fill(self, order: Order, result: ExecutionResult) -> None:
+        pass  # Parsers are stateless
+
+    def generate_signals(self) -> list[Order]:
+        if self._pending_signal is None:
+            return []
+
+        signal = self._pending_signal
+        self._pending_signal = None
+
+        return [Order(
+            token_id=signal.token_id,
+            side=signal.side,
+            quantity=signal.size_usdc / 0.5,  # Estimate shares at mid-price
+            order_type=OrderType.FOK,
+            reason=signal.reason,
+        )]
+
+    def reset(self) -> None:
+        self._parser.reset()
+        self._pending_signal = None
+
+    @property
+    def name(self) -> str:
+        return f"adapted_{self._parser.__class__.__name__}"
+]]></code>
+    </example>
+
+    <example name="Enhanced Orchestrator Event Loop">
+      <code language="python"><![CDATA[
+async def _process_event(self, event: MarketEvent) -> None:
+    """Process a single event through all strategies."""
+    self._metrics["events_processed"] += 1
+
+    # Update portfolio with price if available
+    if self._portfolio and event.token_id and event.last_price:
+        await self._portfolio.on_price_update(event.token_id, event.last_price)
+
+    # Run all strategies
+    for strategy in self._strategies:
+        strategy.on_tick(event)
+        orders = strategy.generate_signals()
+
+        for order in orders:
+            # Validate against portfolio
+            if self._portfolio:
+                is_valid, reason = self._portfolio.check_order(order)
+                if not is_valid:
+                    logger.warning("Order rejected: {}", reason)
+                    continue
+
+            # Execute
+            result = await self._executor.execute_order(order)
+
+            # Update portfolio and strategy
+            if self._portfolio:
+                await self._portfolio.on_fill(order, result)
+            strategy.on_fill(order, result)
+
+            # Persist
+            if self._database:
+                await self._database.insert_trade(result, order)
+            if self._trade_logger:
+                await self._trade_logger.log_execution(
+                    TradeSignal(
+                        token_id=order.token_id,
+                        side=order.side,
+                        size_usdc=order.quantity * result.filled_price,
+                        reason=order.reason,
+                    ),
+                    result,
+                )
+
+            self._metrics["trades_executed"] += 1
+]]></code>
+    </example>
+  </examples>
+
+  <file-changes>
+    <file path="src/models.py" action="modify">Add PositionSide, OrderType, TimeInForce, Position, Order</file>
+    <file path="src/persistence/__init__.py" action="create">New module exports</file>
+    <file path="src/persistence/database.py" action="create">DatabaseManager class</file>
+    <file path="src/persistence/schema.py" action="create">SQL schema constants</file>
+    <file path="src/managers/portfolio.py" action="create">PortfolioManager class</file>
+    <file path="src/interfaces/strategy.py" action="create">BaseStrategy interface</file>
+    <file path="src/strategies/__init__.py" action="create">New module exports</file>
+    <file path="src/strategies/parser_adapter.py" action="create">ParserStrategyAdapter</file>
+    <file path="src/orchestrator.py" action="modify">Extend for strategies + portfolio</file>
+    <file path="src/tui/widgets/positions.py" action="create">PositionsPanel widget</file>
+    <file path="src/tui/app.py" action="modify">Add positions panel to layout</file>
+    <file path="src/callbacks.py" action="modify">Add on_position_updated</file>
+    <file path="pyproject.toml" action="modify">Add aiosqlite dependency</file>
+  </file-changes>
+
+  <backward-compatibility>
+    <item>Existing parsers wrapped via ParserStrategyAdapter</item>
+    <item>JSONL logger retained alongside SQLite</item>
+    <item>TradeSignal still used internally by adapted parsers</item>
+    <item>Orchestrator accepts legacy constructor arguments</item>
+  </backward-compatibility>
+</specification>

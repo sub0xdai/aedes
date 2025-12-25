@@ -1,0 +1,243 @@
+/* Cypherpunk Terminal Theme for poly-event-sniper */
+/* Green/Crimson on black - hacker aesthetic */
+
+/* Color variables */
+$background: #000000;
+$foreground: #00ff00;
+$accent: #00cc00;
+$danger: #ff3333;
+$warning: #ffaa00;
+$muted: #444444;
+$border: #222222;
+$text-muted: #888888;
+
+/* Base screen styling */
+Screen {
+    background: $background;
+    color: $foreground;
+}
+
+/* Header bar */
+Header {
+    dock: top;
+    height: 3;
+    background: $border;
+    color: $foreground;
+    text-style: bold;
+    padding: 0 1;
+}
+
+/* Footer bar */
+Footer {
+    dock: bottom;
+    height: 1;
+    background: $border;
+    color: $text-muted;
+}
+
+/* Connection status indicators */
+.status-connected {
+    color: $foreground;
+    text-style: bold;
+}
+
+.status-disconnected {
+    color: $danger;
+    text-style: bold;
+}
+
+.status-connecting {
+    color: $warning;
+}
+
+/* Main container layout */
+#main-container {
+    layout: horizontal;
+}
+
+/* Left panel - logs */
+#left-panel {
+    width: 60%;
+    height: 100%;
+    padding: 0 1;
+}
+
+/* Right panel - stats and trades */
+#right-panel {
+    width: 40%;
+    height: 100%;
+    padding: 0 1;
+}
+
+/* Live log panel */
+#live-log {
+    border: round $muted;
+    background: $background;
+    color: $foreground;
+    height: 100%;
+    scrollbar-background: $muted;
+    scrollbar-color: $accent;
+    scrollbar-color-hover: $foreground;
+}
+
+/* Status header widget */
+#status-header {
+    height: auto;
+    padding: 1;
+    border: round $muted;
+    background: $background;
+    margin-bottom: 1;
+}
+
+#status-header Label {
+    color: $foreground;
+}
+
+.balance-label {
+    color: $accent;
+    text-style: bold;
+}
+
+/* Strategy stats panel */
+#strategy-stats {
+    height: auto;
+    padding: 1;
+    border: round $muted;
+    background: $background;
+    margin-bottom: 1;
+}
+
+#strategy-stats Label {
+    color: $foreground;
+}
+
+.stats-title {
+    text-style: bold underline;
+    margin-bottom: 1;
+}
+
+.stats-value {
+    color: $accent;
+}
+
+/* Recent trades table */
+#trades-table {
+    height: 1fr;
+    border: round $muted;
+    background: $background;
+}
+
+DataTable {
+    height: 100%;
+}
+
+DataTable > .datatable--header {
+    background: $border;
+    color: $accent;
+    text-style: bold;
+}
+
+DataTable > .datatable--cursor {
+    background: $muted;
+}
+
+DataTable > .datatable--hover {
+    background: $border;
+}
+
+/* Side column coloring for trades */
+.side-buy {
+    color: $foreground;
+    text-style: bold;
+}
+
+.side-sell {
+    color: $danger;
+    text-style: bold;
+}
+
+/* Status column coloring */
+.status-filled {
+    color: $foreground;
+}
+
+.status-failed {
+    color: $danger;
+}
+
+.status-pending {
+    color: $warning;
+}
+
+/* Tabbed content styling */
+TabbedContent {
+    height: 100%;
+}
+
+TabPane {
+    padding: 1;
+}
+
+Tabs {
+    background: $border;
+}
+
+Tab {
+    background: $background;
+    color: $text-muted;
+}
+
+Tab.-active {
+    background: $muted;
+    color: $foreground;
+    text-style: bold;
+}
+
+/* Discovery tab styling */
+#discovery-form {
+    height: auto;
+    padding: 1;
+    border: round $muted;
+    background: $background;
+    margin-bottom: 1;
+}
+
+Input {
+    background: $background;
+    color: $foreground;
+    border: tall $muted;
+}
+
+Input:focus {
+    border: tall $accent;
+}
+
+Button {
+    background: $muted;
+    color: $foreground;
+    border: none;
+}
+
+Button:hover {
+    background: $border;
+}
+
+Button.-primary {
+    background: $accent;
+    color: $background;
+}
+
+Button.-primary:hover {
+    background: $foreground;
+}
+
+Button.-success {
+    background: $foreground;
+    color: $background;
+}
+
+#discovery-results {
+    height: 1fr;
+    border: round $muted;
+    background: $background;
+}
