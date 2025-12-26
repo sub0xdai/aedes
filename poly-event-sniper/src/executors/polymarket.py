@@ -57,23 +57,28 @@ class PolymarketExecutor(BaseExecutor):
     def __init__(
         self,
         max_position_size: float | None = None,
+        private_key: str | None = None,
     ) -> None:
         """Initialize the executor.
 
         Args:
             max_position_size: Maximum allowed position size in USDC.
                               Defaults to DEFAULT_MAX_POSITION_SIZE.
+            private_key: Wallet private key (hex with 0x prefix).
+                        If not provided, uses POLYGON_PRIVATE_KEY from .env.
         """
         self._client: ClobClient | None = None
         self._settings = get_settings()
         self._max_position_size = max_position_size or self.DEFAULT_MAX_POSITION_SIZE
         self._last_request_time: float = 0.0
+        self._private_key = private_key  # Optional override
 
     async def setup(self) -> None:
         """Initialize CLOB client with API credentials.
 
-        Creates the ClobClient and sets up authentication using
-        the configured API credentials.
+        Creates the ClobClient and sets up authentication. Supports two modes:
+        1. Auto-derive: If CLOB_API_KEY is empty/placeholder, derive from private key
+        2. Explicit: Use provided API credentials
 
         Raises:
             AuthenticationError: If API credentials are invalid or missing.
@@ -81,18 +86,44 @@ class PolymarketExecutor(BaseExecutor):
         logger.info("Initializing Polymarket CLOB client")
 
         try:
-            creds = ApiCreds(
-                api_key=self._settings.clob.api_key.get_secret_value(),
-                api_secret=self._settings.clob.api_secret.get_secret_value(),
-                api_passphrase=self._settings.clob.api_passphrase.get_secret_value(),
-            )
+            # Use provided private key or fall back to .env
+            if self._private_key:
+                private_key = self._private_key
+            else:
+                private_key = self._settings.polygon.private_key.get_secret_value()
 
-            self._client = ClobClient(
-                host=self.HOST,
-                chain_id=self.CHAIN_ID,
-                key=self._settings.polygon.private_key.get_secret_value(),
-                creds=creds,
-            )
+            # Check if we should auto-derive credentials
+            api_key = self._settings.clob.api_key.get_secret_value()
+            should_derive = not api_key or api_key.startswith("your_") or api_key == "test"
+
+            if should_derive:
+                logger.info("Auto-deriving API credentials from private key")
+                # Initialize client without credentials first
+                self._client = ClobClient(
+                    host=self.HOST,
+                    chain_id=self.CHAIN_ID,
+                    key=private_key,
+                    signature_type=0,  # EOA wallet (MetaMask/browser)
+                )
+                # Derive and set credentials
+                creds = await asyncio.to_thread(
+                    self._client.create_or_derive_api_creds
+                )
+                self._client.set_api_creds(creds)
+                logger.info("API credentials derived successfully")
+            else:
+                logger.info("Using explicit API credentials from .env")
+                creds = ApiCreds(
+                    api_key=api_key,
+                    api_secret=self._settings.clob.api_secret.get_secret_value(),
+                    api_passphrase=self._settings.clob.api_passphrase.get_secret_value(),
+                )
+                self._client = ClobClient(
+                    host=self.HOST,
+                    chain_id=self.CHAIN_ID,
+                    key=private_key,
+                    creds=creds,
+                )
 
             logger.info("Polymarket CLOB client initialized successfully")
 

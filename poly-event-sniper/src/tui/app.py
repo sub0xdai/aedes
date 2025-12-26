@@ -12,12 +12,15 @@ from textual.worker import Worker
 
 from src.callbacks import OrchestratorCallback
 from src.models import ExecutionResult, OrderStatus, Position, Side, TradeSignal
+from src.tui.widgets.wallet import WalletWidget
+from src.wallet import WalletManager
 
 if TYPE_CHECKING:
     from src.discovery import DiscoveryStrategy
     from src.models import ThresholdRule
     from src.orchestrator import Orchestrator
     from src.parsers.keyword import KeywordRule
+    from src.wallet import Wallet
 
 
 class TuiCallback(OrchestratorCallback):
@@ -104,6 +107,14 @@ class AedesApp(App[None]):
         height: 100%;
     }
 
+    #wallet-panel {
+        border: solid #cba6f7;
+        height: auto;
+        padding: 1;
+        margin-bottom: 1;
+        background: #1e1e2e;
+    }
+
     #status-panel {
         border: solid #313244;
         height: auto;
@@ -178,16 +189,21 @@ class AedesApp(App[None]):
         self._tui_callback: TuiCallback | None = None
         self._demo_task: asyncio.Task[None] | None = None
         self._trade_count = 0
+        self._wallet_manager = WalletManager()
+        self._active_wallet: "Wallet | None" = None
 
     def compose(self) -> ComposeResult:
         yield Header()
         with Horizontal(id="main"):
             yield RichLog(id="log-panel", highlight=True, markup=True, auto_scroll=True)
             with Vertical(id="right-panel"):
+                with Static(id="wallet-panel"):
+                    yield Label("WALLET", classes="section-title")
+                    yield WalletWidget(self._wallet_manager, id="wallet-widget")
+
                 with Static(id="status-panel"):
                     yield Label("STATUS", classes="section-title")
                     yield Label("○ Disconnected", id="connection-status", classes="status-disconnected")
-                    yield Label("Balance: $0.00", id="balance", classes="label-value")
 
                 with Static(id="stats-panel"):
                     yield Label("STRATEGIES", classes="section-title")
@@ -211,7 +227,55 @@ class AedesApp(App[None]):
         if self._demo_mode:
             await self._start_demo_mode(log)
         else:
+            # Start in view-only mode immediately
+            # Wallet widget handles wallet state inline
+            log.write("[bold #f9e2af]AEDES - Polymarket Event Sniper[/]")
+            log.write("")
+
+            if self._wallet_manager.has_wallets():
+                log.write("[#6c7086]Wallet found - unlock to enable trading[/]")
+            else:
+                log.write("[#6c7086]No wallet - create one to start trading[/]")
+
+            log.write("[#6c7086]Starting market feed (view-only mode)...[/]")
+            log.write("")
+
+            # Start orchestrator in view-only mode
             await self._start_live_mode(log)
+
+    def on_wallet_widget_wallet_unlocked(self, event: WalletWidget.WalletUnlocked) -> None:
+        """Handle wallet unlock from inline widget."""
+        self._active_wallet = event.wallet
+        log = self.query_one("#log-panel", RichLog)
+        log.write(f"[#a6e3a1]Wallet unlocked: {event.wallet.short_address}[/]")
+        log.write("[#a6e3a1]Trading enabled![/]")
+
+        # Restart orchestrator with wallet if needed
+        if self._orchestrator:
+            asyncio.create_task(self._restart_with_wallet())
+
+    def on_wallet_widget_wallet_created(self, event: WalletWidget.WalletCreated) -> None:
+        """Handle wallet creation from inline widget."""
+        self._active_wallet = event.wallet
+        log = self.query_one("#log-panel", RichLog)
+        log.write(f"[#a6e3a1]Wallet created: {event.wallet.short_address}[/]")
+        log.write(f"[#89b4fa]Deposit address: {event.wallet.address}[/]")
+        log.write("[#6c7086]Fund your wallet with USDC on Polygon to start trading[/]")
+
+    async def _restart_with_wallet(self) -> None:
+        """Restart orchestrator with wallet enabled."""
+        log = self.query_one("#log-panel", RichLog)
+        log.write("[#6c7086]Restarting with wallet...[/]")
+
+        # Stop current orchestrator
+        if self._orchestrator:
+            await self._orchestrator.stop()
+
+        if self._orchestrator_worker:
+            self._orchestrator_worker.cancel()
+
+        # Rebuild and restart
+        await self._start_live_mode(log)
 
     async def _start_demo_mode(self, log: RichLog) -> None:
         """Start demo mode with fake data."""
@@ -222,9 +286,12 @@ class AedesApp(App[None]):
         # Set mock initial state
         self.query_one("#connection-status", Label).update("● Connected (Demo)")
         self.query_one("#connection-status", Label).set_classes("status-connected")
-        self.query_one("#balance", Label).update("Balance: $1,337.42")
         self.query_one("#threshold-rules", Label).update("ThresholdRules: 3")
         self.query_one("#keyword-rules", Label).update("KeywordRules: 4")
+
+        # Set demo wallet balance
+        wallet_widget = self.query_one("#wallet-widget", WalletWidget)
+        wallet_widget.set_balance(1337.42)
 
         self._demo_task = asyncio.create_task(self._run_demo_loop(log))
 
@@ -304,7 +371,6 @@ class AedesApp(App[None]):
         # Update UI
         self.query_one("#connection-status", Label).update("● Connected")
         self.query_one("#connection-status", Label).set_classes("status-connected")
-        self.query_one("#balance", Label).update("Balance: $1,000.00")  # Mock for now
 
         # Register callback
         self._tui_callback = TuiCallback(self)
@@ -393,7 +459,16 @@ class AedesApp(App[None]):
         if keyword_rules:
             parsers.append(KeywordParser(keyword_rules))
 
-        executor = PolymarketExecutor(max_position_size=settings.bot.max_position_size)
+        # Use wallet private key if available
+        private_key = None
+        if self._active_wallet:
+            private_key = self._active_wallet.private_key
+            log.write(f"[#a6e3a1]Using wallet: {self._active_wallet.short_address}[/]")
+
+        executor = PolymarketExecutor(
+            max_position_size=settings.bot.max_position_size,
+            private_key=private_key,
+        )
         trade_logger = TradeLogger()
 
         return Orchestrator(

@@ -19,7 +19,11 @@ class PolygonConfig(BaseSettings):
 
 
 class ClobConfig(BaseSettings):
-    """Polymarket CLOB API configuration."""
+    """Polymarket CLOB API configuration.
+
+    API credentials are optional - if not provided, they will be
+    auto-derived from the POLYGON_PRIVATE_KEY at runtime.
+    """
 
     model_config = SettingsConfigDict(
         env_prefix="CLOB_",
@@ -28,9 +32,10 @@ class ClobConfig(BaseSettings):
         extra="ignore",
     )
 
-    api_key: SecretStr
-    api_secret: SecretStr
-    api_passphrase: SecretStr
+    # Optional - will be derived from private key if not set
+    api_key: SecretStr = SecretStr("")
+    api_secret: SecretStr = SecretStr("")
+    api_passphrase: SecretStr = SecretStr("")
 
 
 class BotConfig(BaseSettings):

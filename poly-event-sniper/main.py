@@ -58,7 +58,7 @@ def load_threshold_rules() -> list[ThresholdRule]:
             trigger_side=Side.BUY,
             threshold=0.95,
             comparison="below",
-            size_usdc=100.0,
+            size_usdc=2.0,  # $2 for testing
             reason_template="BTC $100k dip buy: probability dropped below {threshold}",
             cooldown_seconds=300.0,  # 5 min cooldown to avoid rapid-fire buys
         ),
@@ -78,7 +78,7 @@ def load_keyword_rules() -> list[KeywordRule]:
             keyword="Epstein",
             token_id="86076435751570733286369126634541849471627178793773765844822295389135259614946",
             trigger_side=Side.BUY,
-            size_usdc=50.0,
+            size_usdc=1.5,  # $1.50 for testing
             reason_template="Epstein news detected: {keyword}",
             cooldown_seconds=600.0,  # 10 min cooldown
         ),
@@ -86,7 +86,7 @@ def load_keyword_rules() -> list[KeywordRule]:
             keyword="Trump release",
             token_id="86076435751570733286369126634541849471627178793773765844822295389135259614946",
             trigger_side=Side.BUY,
-            size_usdc=50.0,
+            size_usdc=1.5,  # $1.50 for testing
             reason_template="Trump release news detected: {keyword}",
             cooldown_seconds=600.0,
         ),
@@ -97,7 +97,7 @@ def load_keyword_rules() -> list[KeywordRule]:
             keyword="49ers touchdown",
             token_id="85455113016431049626358535958294679323212801434936446670950500092521192392446",
             trigger_side=Side.BUY,
-            size_usdc=25.0,
+            size_usdc=1.0,  # $1 for testing
             reason_template="49ers scored: {keyword}",
             cooldown_seconds=120.0,  # 2 min cooldown (fast-moving game)
         ),
@@ -105,7 +105,7 @@ def load_keyword_rules() -> list[KeywordRule]:
             keyword="San Francisco score",
             token_id="85455113016431049626358535958294679323212801434936446670950500092521192392446",
             trigger_side=Side.BUY,
-            size_usdc=25.0,
+            size_usdc=1.0,  # $1 for testing
             reason_template="49ers scored: {keyword}",
             cooldown_seconds=120.0,
         ),
@@ -151,7 +151,7 @@ def load_discovery_strategies() -> list[DiscoveryStrategy]:
                 trigger_side="BUY",
                 threshold=0.20,
                 comparison="below",
-                size_usdc=25.0,
+                size_usdc=1.5,  # $1.50 for testing
                 cooldown_seconds=300.0,
             ),
             max_markets=5,
@@ -170,7 +170,7 @@ def load_discovery_strategies() -> list[DiscoveryStrategy]:
                 trigger_side="SELL",
                 threshold=0.80,
                 comparison="above",
-                size_usdc=50.0,
+                size_usdc=1.5,  # $1.50 for testing
                 cooldown_seconds=600.0,
             ),
             max_markets=3,
