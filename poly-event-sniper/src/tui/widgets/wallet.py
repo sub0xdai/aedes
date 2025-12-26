@@ -22,11 +22,18 @@ class WalletWidget(Static):
     WalletWidget {
         height: auto;
         padding: 0;
+        width: 100%;
+    }
+
+    WalletWidget #wallet-content {
+        width: 100%;
+        height: auto;
     }
 
     .wallet-row {
-        height: 3;
-        align: left middle;
+        height: auto;
+        width: 100%;
+        layout: horizontal;
     }
 
     .wallet-address {
@@ -45,12 +52,12 @@ class WalletWidget(Static):
     }
 
     .wallet-action {
-        min-width: 12;
-        height: 1;
+        min-width: 8;
+        height: 3;
         background: #313244;
         color: #cdd6f4;
-        border: none;
-        padding: 0 1;
+        border: tall #45475a;
+        margin: 0 1 0 0;
     }
 
     .wallet-action:hover {
@@ -63,18 +70,34 @@ class WalletWidget(Static):
     }
 
     #password-input {
-        width: 20;
-        height: 1;
-        margin-right: 1;
+        width: 100%;
+        height: 3;
+        margin-bottom: 1;
+        background: #313244;
+        color: #cdd6f4;
+        border: tall #45475a;
+    }
+
+    #password-input:focus {
+        border: tall #cba6f7;
     }
 
     .inline-form {
-        height: 3;
-        align: left middle;
+        height: auto;
+        width: 100%;
+        layout: vertical;
+        padding: 0;
+    }
+
+    .form-buttons {
+        layout: horizontal;
+        height: auto;
+        width: 100%;
     }
 
     .error-text {
         color: #f38ba8;
+        margin-top: 1;
     }
 
     .deposit-address {
@@ -173,12 +196,17 @@ class WalletWidget(Static):
 
     def _render_create_form(self, container: Static) -> None:
         """Render create wallet form."""
+        from textual.containers import Vertical
+
         container.update("")
         container.mount(
-            Horizontal(
+            Vertical(
                 Input(placeholder="Password (8+ chars)", id="password-input", password=True),
-                Button("Create", id="btn-do-create", classes="wallet-action"),
-                Button("Cancel", id="btn-cancel", classes="wallet-action"),
+                Horizontal(
+                    Button("Create", id="btn-do-create", classes="wallet-action"),
+                    Button("Cancel", id="btn-cancel", classes="wallet-action"),
+                    classes="form-buttons",
+                ),
                 classes="inline-form",
             )
         )
@@ -187,12 +215,17 @@ class WalletWidget(Static):
 
     def _render_unlock_form(self, container: Static) -> None:
         """Render unlock wallet form."""
+        from textual.containers import Vertical
+
         container.update("")
         container.mount(
-            Horizontal(
+            Vertical(
                 Input(placeholder="Password", id="password-input", password=True),
-                Button("Unlock", id="btn-do-unlock", classes="wallet-action"),
-                Button("Cancel", id="btn-cancel", classes="wallet-action"),
+                Horizontal(
+                    Button("Unlock", id="btn-do-unlock", classes="wallet-action"),
+                    Button("Cancel", id="btn-cancel", classes="wallet-action"),
+                    classes="form-buttons",
+                ),
                 classes="inline-form",
             )
         )

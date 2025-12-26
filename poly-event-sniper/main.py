@@ -342,6 +342,20 @@ async def main_tui(demo: bool = False) -> None:
     Args:
         demo: If True, run in demo mode with fake data (no real connections).
     """
+    # Configure logging for TUI - suppress verbose output
+    logger.remove()  # Remove default handler
+    logger.add(
+        "logs/tui_{time}.log",
+        rotation="100 MB",
+        retention="7 days",
+        level="DEBUG",
+    )
+    # Only log warnings and above to avoid TUI spam
+    logger.add(
+        lambda msg: None,  # Discard - TUI handles display
+        level="WARNING",
+    )
+
     from src.tui import AedesApp
 
     app = AedesApp(demo_mode=demo)

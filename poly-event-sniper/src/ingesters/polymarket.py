@@ -195,6 +195,17 @@ class PolymarketIngester(MarketDataIngester):
         """Parse WebSocket message into MarketEvent."""
         try:
             payload = json.loads(data)
+
+            # Handle array messages (batch updates)
+            if isinstance(payload, list):
+                # Process first item if it's a batch, or skip
+                if not payload:
+                    return None
+                payload = payload[0] if isinstance(payload[0], dict) else {"_skip": True}
+
+            if not isinstance(payload, dict):
+                return None
+
             event_type_str = payload.get("event_type", "")
 
             # Map event types
@@ -220,13 +231,22 @@ class PolymarketIngester(MarketDataIngester):
             last_size = self._safe_float(payload.get("size"))
 
             # For book events, extract from bids/asks arrays
+            # API can return either [{price, size}] or [[price, size]] format
             if event_type == EventType.BOOK_UPDATE:
                 bids = payload.get("buys", [])
                 asks = payload.get("sells", [])
                 if bids:
-                    best_bid = self._safe_float(bids[0].get("price"))
+                    first_bid = bids[0]
+                    if isinstance(first_bid, dict):
+                        best_bid = self._safe_float(first_bid.get("price"))
+                    elif isinstance(first_bid, (list, tuple)) and len(first_bid) > 0:
+                        best_bid = self._safe_float(first_bid[0])
                 if asks:
-                    best_ask = self._safe_float(asks[0].get("price"))
+                    first_ask = asks[0]
+                    if isinstance(first_ask, dict):
+                        best_ask = self._safe_float(first_ask.get("price"))
+                    elif isinstance(first_ask, (list, tuple)) and len(first_ask) > 0:
+                        best_ask = self._safe_float(first_ask[0])
 
             return MarketEvent(
                 event_type=event_type,
