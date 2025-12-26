@@ -46,6 +46,7 @@ Poly Event Sniper monitors Polymarket markets via WebSocket and automatically ex
 | Type Checking | MyPy (strict) |
 | Testing | pytest + pytest-asyncio |
 | Formatting | black, isort |
+| User Interface | Textual |
 
 ## Project Structure
 
@@ -64,8 +65,10 @@ poly-event-sniper/
 │   │   └── polymarket.py      # Polymarket CLOB executor
 │   ├── ingesters/
 │   │   └── polymarket.py      # WebSocket market data ingester
-│   └── parsers/
-│       └── threshold.py       # Price threshold parser
+    └── parsers/
+        └── threshold.py       # Price threshold parser
+    ├── tui/
+    │   └── app.py             # Textual TUI application
 ├── tests/
 │   ├── test_execution.py      # Executor tests (33)
 │   ├── test_ingestion.py      # Ingester tests (18)
@@ -157,7 +160,26 @@ uv run python main.py
 # Logs are written to logs/ directory
 ```
 
-### Run Tests
+## User Interface
+
+The bot includes a terminal-based user interface (TUI) built with Textual for real-time monitoring.
+
+### Run TUI (Live Mode)
+```bash
+uv run python -m src.tui.app
+```
+
+### Run TUI (Demo Mode)
+Simulate market events and trades without connecting to APIs:
+```bash
+uv run python -m src.tui.app --demo
+```
+
+Key bindings:
+- `q`: Quit application
+- `c`: Clear logs
+
+## Run Tests
 
 ```bash
 # Run all tests
