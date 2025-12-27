@@ -60,6 +60,17 @@ After Create/Import:
 │  █ █▄▄▄█ █                                  │
 │  [Continue to Trading]                      │
 └─────────────────────────────────────────────┘
+
+Wallet Management (press 'w'):
+┌─────────────────────────────────────────────┐
+│          WALLET MANAGEMENT                  │
+│  Select a wallet to use:                    │
+│  [aedes_1735266123 (0xb62d...a9a3)]         │
+│  [imported_wallet (0x742d...59e7)]          │
+│                                             │
+│  [Create/Import New]                        │
+│  [Cancel]                                   │
+└─────────────────────────────────────────────┘
 ```
 
 ## Architecture Overview
@@ -83,6 +94,7 @@ Ingesters (N)          Parsers/Strategies (M)       Executor
 - **Multi-parser routing**: Each event evaluated by all parsers
 - **Gamma discovery**: Auto-discover markets by criteria (tags, volume, liquidity)
 - **Wallet wizard**: Create/import wallets with QR code for funding
+- **Multi-wallet management**: Switch between wallets with `w` hotkey
 - **Auto-derive CLOB**: API credentials derived from private key automatically
 - **Portfolio tracking**: Position management, PnL calculation, risk controls
 - **Dual persistence**: SQLite (queries) + JSONL (audit trail)
@@ -97,6 +109,15 @@ uv run python main.py --demo      # Demo mode (fake data)
 uv run python main.py             # Headless mode
 uv run pytest -v                  # Run tests
 ```
+
+## Hotkeys
+
+| Key | Action |
+|-----|--------|
+| `q` | Quit application |
+| `c` | Clear log panel |
+| `u` | Lock/Unlock current wallet |
+| `w` | Open wallet management |
 
 ## Test Coverage
 
@@ -120,7 +141,7 @@ src/
 │   ├── app.py                 # Main TUI app with modal logic
 │   └── widgets/
 │       ├── global_header.py   # Header with wallet info
-│       ├── unlock_modal.py    # Wallet wizard (create/import/unlock)
+│       ├── unlock_modal.py    # Wallet wizard (create/import/unlock/manage)
 │       └── qr_display.py      # Terminal QR code widget
 ├── wallet/manager.py          # Wallet create/import/load/encrypt
 ├── executors/polymarket.py    # CLOB client, auto-derive credentials
