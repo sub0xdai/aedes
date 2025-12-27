@@ -169,6 +169,7 @@ class AedesApp(App[None]):
         ("q", "quit", "Quit"),
         ("c", "clear_logs", "Clear"),
         ("u", "toggle_lock", "Lock/Unlock"),
+        ("w", "manage_wallets", "Wallets"),
     ]
 
     def __init__(self, demo_mode: bool = False) -> None:
@@ -247,8 +248,35 @@ class AedesApp(App[None]):
         # Start orchestrator (view-only until wallet unlocked)
         await self._start_live_mode(log)
 
-    def _show_unlock_modal(self) -> None:
-        """Show the unlock/create wallet modal."""
+    def _handle_wallet_change(self, wallet: "Wallet | None", env_fallback: bool = False) -> None:
+        """Handle wallet change from modal.
+
+        Args:
+            wallet: The new wallet, or None if cancelled.
+            env_fallback: Whether .env wallet is available as fallback.
+        """
+        if wallet:
+            self._active_wallet = wallet
+            header = self.query_one("#global-header", GlobalHeader)
+            header.set_wallet(wallet.address, 0.0)
+
+            log = self.query_one("#log-panel", RichLog)
+            log.write(f"[#a6e3a1]Wallet active: {wallet.short_address}[/]")
+
+            # Restart orchestrator with wallet
+            if self._orchestrator:
+                asyncio.create_task(self._restart_with_wallet())
+        elif env_fallback:
+            # User chose to use .env wallet - executor will use it
+            log = self.query_one("#log-panel", RichLog)
+            log.write("[#89b4fa]Using .env wallet for trading[/]")
+
+    def _show_unlock_modal(self, initial_view: str | None = None) -> None:
+        """Show the unlock/create wallet modal.
+
+        Args:
+            initial_view: Optional initial view to show (e.g., "manage").
+        """
         from src.config import get_settings
 
         # Check if .env has a valid private key
@@ -257,24 +285,14 @@ class AedesApp(App[None]):
         env_wallet_available = bool(env_key) and len(env_key) >= 64
 
         def handle_result(wallet: "Wallet | None") -> None:
-            if wallet:
-                self._active_wallet = wallet
-                header = self.query_one("#global-header", GlobalHeader)
-                header.set_wallet(wallet.address, 0.0)
-
-                log = self.query_one("#log-panel", RichLog)
-                log.write(f"[#a6e3a1]Wallet active: {wallet.short_address}[/]")
-
-                # Restart orchestrator with wallet
-                if self._orchestrator:
-                    asyncio.create_task(self._restart_with_wallet())
-            elif env_wallet_available:
-                # User chose to use .env wallet - executor will use it
-                log = self.query_one("#log-panel", RichLog)
-                log.write("[#89b4fa]Using .env wallet for trading[/]")
+            self._handle_wallet_change(wallet, env_fallback=env_wallet_available)
 
         self.push_screen(
-            UnlockModal(self._wallet_manager, env_wallet_available=env_wallet_available),
+            UnlockModal(
+                self._wallet_manager,
+                env_wallet_available=env_wallet_available,
+                initial_view=initial_view,
+            ),
             handle_result,
         )
 
@@ -292,6 +310,10 @@ class AedesApp(App[None]):
         else:
             # Show unlock modal
             self._show_unlock_modal()
+
+    def action_manage_wallets(self) -> None:
+        """Open wallet management modal."""
+        self._show_unlock_modal(initial_view="manage")
 
     def on_unlock_modal_wallet_unlocked(self, event: UnlockModal.WalletUnlocked) -> None:
         """Handle wallet unlock from modal."""

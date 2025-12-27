@@ -20,7 +20,7 @@ Algorithmic trading bot for Polymarket prediction markets. Monitors price feeds 
 │                                │ RECENT TRADES       (50%)           │
 │                                │ (none)                              │
 ├────────────────────────────────┴─────────────────────────────────────┤
-│ q Quit  c Clear  u Lock/Unlock                                       │
+│ q Quit  c Clear  u Lock/Unlock  w Wallets                            │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -35,6 +35,7 @@ Algorithmic trading bot for Polymarket prediction markets. Monitors price feeds 
 | **Import Methods** | `import_from_keystore()`, `import_from_private_key()` in WalletManager |
 | **.env Fallback** | Power users can bypass TUI wallet with POLYGON_PRIVATE_KEY |
 | **Optional Config** | POLYGON_PRIVATE_KEY now optional (TUI-first mode) |
+| **Wallet Hotkey** | Press `w` to manage/switch wallets during runtime |
 
 ## Wallet Wizard Flow
 

@@ -16,7 +16,7 @@ from textual.widgets import Button, Input, Label, Static
 from src.wallet import Wallet, WalletManager
 
 # View state type
-ViewState = Literal["choice", "create", "import_key", "import_keystore", "unlock", "success"]
+ViewState = Literal["choice", "create", "import_key", "import_keystore", "unlock", "success", "manage"]
 
 
 class UnlockModal(ModalScreen[Wallet | None]):
@@ -32,6 +32,7 @@ class UnlockModal(ModalScreen[Wallet | None]):
         - import_keystore: Import from keystore file
         - unlock: Unlock existing wallet
         - success: Show address + QR code
+        - manage: Multi-wallet management (select/switch wallets)
     """
 
     BINDINGS = [
@@ -199,21 +200,26 @@ class UnlockModal(ModalScreen[Wallet | None]):
         self,
         wallet_manager: WalletManager,
         env_wallet_available: bool = False,
+        initial_view: ViewState | None = None,
     ) -> None:
         """Initialize the wallet wizard.
 
         Args:
             wallet_manager: WalletManager instance for operations.
             env_wallet_available: Whether .env has a valid private key.
+            initial_view: Force a specific initial view (e.g., "manage").
         """
         super().__init__()
         self._wallet_manager = wallet_manager
         self._env_wallet_available = env_wallet_available
         self._error = ""
         self._created_wallet: Wallet | None = None
+        self._target_address: str | None = None  # Track which wallet to unlock
 
         # Determine initial view
-        if wallet_manager.has_wallets():
+        if initial_view is not None:
+            self.view = initial_view
+        elif wallet_manager.has_wallets():
             self.view = "unlock"
         else:
             self.view = "choice"
@@ -237,6 +243,8 @@ class UnlockModal(ModalScreen[Wallet | None]):
             yield from self._compose_unlock()
         elif self.view == "success":
             yield from self._compose_success()
+        elif self.view == "manage":
+            yield from self._compose_manage()
 
     def _compose_choice(self) -> ComposeResult:
         """Compose first-run choice screen."""
@@ -309,10 +317,16 @@ class UnlockModal(ModalScreen[Wallet | None]):
         """Compose unlock existing wallet screen."""
         yield Label("UNLOCK WALLET", classes="modal-title")
 
-        # Show wallet address
+        # Show wallet address (use target or first available)
         wallets = self._wallet_manager.list_wallets()
-        if wallets:
+        if self._target_address:
+            addr = self._target_address
+        elif wallets:
             addr = wallets[0]["address"]
+        else:
+            addr = None
+
+        if addr:
             short = f"{addr[:6]}...{addr[-4:]}"
             yield Label(short, classes="wallet-address")
 
@@ -344,6 +358,37 @@ class UnlockModal(ModalScreen[Wallet | None]):
 
         button_row = Center(classes="button-row")
         button_row._add_children(Button("Continue to Trading", id="btn-continue", classes="btn-primary"))
+        yield button_row
+
+    def _compose_manage(self) -> ComposeResult:
+        """Compose wallet management screen."""
+        yield Label("WALLET MANAGEMENT", classes="modal-title")
+        yield Label("Select a wallet to use:", classes="modal-subtitle")
+
+        wallets = self._wallet_manager.list_wallets()
+
+        if wallets:
+            wallet_container = Vertical(classes="choice-buttons")
+            wallet_buttons = []
+            for wallet_info in wallets:
+                addr = wallet_info["address"]
+                name = wallet_info["name"]
+                short = f"{addr[:6]}...{addr[-4:]}"
+                btn = Button(
+                    f"{name} ({short})",
+                    id=f"btn-wallet-{addr.lower()}",
+                    classes="btn-choice",
+                )
+                wallet_buttons.append(btn)
+            wallet_container._add_children(*wallet_buttons)
+            yield wallet_container
+
+        # Add new wallet button
+        yield Label("", classes="info-text")
+        yield Button("Create/Import New", id="btn-add-new", classes="btn-secondary")
+
+        button_row = Center(classes="button-row")
+        button_row._add_children(Button("Cancel", id="btn-cancel", classes="btn-secondary"))
         yield button_row
 
     def watch_view(self, old_view: ViewState, new_view: ViewState) -> None:
@@ -421,7 +466,12 @@ class UnlockModal(ModalScreen[Wallet | None]):
         if button_id == "btn-cancel":
             self.dismiss(None)
         elif button_id == "btn-back":
-            self.view = "choice"
+            # Go back to manage view if we came from there, else choice
+            if self._target_address is not None:
+                self._target_address = None
+                self.view = "manage"
+            else:
+                self.view = "choice"
         elif button_id == "btn-use-env":
             # User chose to use .env wallet
             self.dismiss(None)
@@ -433,6 +483,15 @@ class UnlockModal(ModalScreen[Wallet | None]):
             self.view = "import_keystore"
         elif button_id == "btn-choice-key":
             self.view = "import_key"
+
+        # Manage view buttons
+        elif button_id == "btn-add-new":
+            self.view = "choice"
+        elif button_id and button_id.startswith("btn-wallet-"):
+            # Extract address from button ID (btn-wallet-0x...)
+            address = button_id[len("btn-wallet-"):]
+            self._target_address = address
+            self.view = "unlock"
 
         # Action buttons
         elif button_id == "btn-unlock":
@@ -473,13 +532,18 @@ class UnlockModal(ModalScreen[Wallet | None]):
             self._show_error("Please enter password")
             return
 
-        wallets = self._wallet_manager.list_wallets()
-        if not wallets:
-            self._show_error("No wallet found")
-            return
+        # Use target address or fallback to first wallet
+        if self._target_address:
+            address = self._target_address
+        else:
+            wallets = self._wallet_manager.list_wallets()
+            if not wallets:
+                self._show_error("No wallet found")
+                return
+            address = wallets[0]["address"]
 
         try:
-            wallet = self._wallet_manager.load_wallet(wallets[0]["address"], password)
+            wallet = self._wallet_manager.load_wallet(address, password)
             self.post_message(self.WalletUnlocked(wallet))
             self.dismiss(wallet)
         except ValueError:
