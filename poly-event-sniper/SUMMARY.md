@@ -1,6 +1,6 @@
 # Aedes - Polymarket Event Sniper
 
-**Tests:** 319 passing | **Status:** Phase 9 complete (TUI Refactor)
+**Tests:** 339 passing | **Status:** Phase 10 complete (Wallet Wizard UX)
 
 ## What It Does
 
@@ -24,18 +24,42 @@ Algorithmic trading bot for Polymarket prediction markets. Monitors price feeds 
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-**On startup:** Modal overlay prompts for wallet unlock/create. Dismisses after success.
+**On startup:** Wallet wizard modal with Create/Import options. QR code for funding on success.
 
-## Recent Changes (Phase 9)
+## Recent Changes (Phase 10)
 
 | Component | Description |
 |-----------|-------------|
-| **UnlockModal** | Centered overlay for wallet unlock/create on startup |
-| **GlobalHeader** | Title + status + mode (left) │ wallet address + balance (right) |
-| **Sidebar 50/50** | Stats panel (top half), Trades panel (bottom half) |
-| **Key bindings** | `q` Quit, `c` Clear, `u` Lock/Unlock |
-| **Logging fix** | TUI mode suppresses console spam, logs to file only |
-| **Stream fix** | Handles array payloads from Polymarket WebSocket |
+| **WalletWizard** | First-run wizard: Create / Import Keystore / Import Private Key |
+| **QR Code Funding** | Terminal QR code for mobile wallet deposits (segno) |
+| **Import Methods** | `import_from_keystore()`, `import_from_private_key()` in WalletManager |
+| **.env Fallback** | Power users can bypass TUI wallet with POLYGON_PRIVATE_KEY |
+| **Optional Config** | POLYGON_PRIVATE_KEY now optional (TUI-first mode) |
+
+## Wallet Wizard Flow
+
+```
+First Run (no wallets):
+┌─────────────────────────────────────────────┐
+│            WALLET SETUP                     │
+│  Choose how to set up your trading wallet:  │
+│  [Create New Wallet]                        │
+│  [Import MetaMask Keystore]                 │
+│  [Import Private Key]                       │
+│  [Use .env Wallet] (if available)           │
+└─────────────────────────────────────────────┘
+
+After Create/Import:
+┌─────────────────────────────────────────────┐
+│           WALLET READY                      │
+│  Your deposit address:                      │
+│  0x742d35Cc6634C0532925a3b844Bc9e759...     │
+│  ▄▄▄▄▄▄▄▄▄▄▄                                │
+│  █ ▄▄▄▄▄ █  <- QR Code (scan to fund)       │
+│  █ █▄▄▄█ █                                  │
+│  [Continue to Trading]                      │
+└─────────────────────────────────────────────┘
+```
 
 ## Architecture Overview
 
@@ -57,7 +81,8 @@ Ingesters (N)          Parsers/Strategies (M)       Executor
 - **Multi-source ingestion**: Polymarket WebSocket, RSS feeds, manual injection
 - **Multi-parser routing**: Each event evaluated by all parsers
 - **Gamma discovery**: Auto-discover markets by criteria (tags, volume, liquidity)
-- **Wallet management**: Create/unlock wallets in-app (Ethereum keystore encryption)
+- **Wallet wizard**: Create/import wallets with QR code for funding
+- **Auto-derive CLOB**: API credentials derived from private key automatically
 - **Portfolio tracking**: Position management, PnL calculation, risk controls
 - **Dual persistence**: SQLite (queries) + JSONL (audit trail)
 
@@ -66,8 +91,7 @@ Ingesters (N)          Parsers/Strategies (M)       Executor
 ```bash
 cd poly-event-sniper
 uv sync
-cp .env.example .env  # Fill in credentials (optional for dry-run)
-uv run python main.py --tui       # TUI mode
+uv run python main.py --tui       # TUI mode (wallet wizard on first run)
 uv run python main.py --demo      # Demo mode (fake data)
 uv run python main.py             # Headless mode
 uv run pytest -v                  # Run tests
@@ -83,9 +107,9 @@ uv run pytest -v                  # Run tests
 | Portfolio & strategies | 76 |
 | Persistence & database | 28 |
 | TUI & callbacks | 21 |
-| Wallet management | 16 |
+| Wallet management | 36 |
 | Integration | 43 |
-| **Total** | **319** |
+| **Total** | **339** |
 
 ## File Structure
 
@@ -95,8 +119,9 @@ src/
 │   ├── app.py                 # Main TUI app with modal logic
 │   └── widgets/
 │       ├── global_header.py   # Header with wallet info
-│       └── unlock_modal.py    # Unlock/create modal overlay
-├── wallet/manager.py          # Wallet create/load/encrypt
+│       ├── unlock_modal.py    # Wallet wizard (create/import/unlock)
+│       └── qr_display.py      # Terminal QR code widget
+├── wallet/manager.py          # Wallet create/import/load/encrypt
 ├── executors/polymarket.py    # CLOB client, auto-derive credentials
 ├── ingesters/polymarket.py    # WebSocket with array payload handling
 ├── discovery/                 # Gamma API client
@@ -109,6 +134,7 @@ src/
 
 ```
 textual ^6.11.0    # TUI framework
+segno ^1.6.1       # QR code generation
 aiosqlite ^0.20.0  # Async SQLite
 feedparser ^6.0.12 # RSS parsing
 aiofiles ^25.1.0   # Async file I/O

@@ -249,6 +249,12 @@ class AedesApp(App[None]):
 
     def _show_unlock_modal(self) -> None:
         """Show the unlock/create wallet modal."""
+        from src.config import get_settings
+
+        # Check if .env has a valid private key
+        settings = get_settings()
+        env_key = settings.polygon.private_key.get_secret_value()
+        env_wallet_available = bool(env_key) and len(env_key) >= 64
 
         def handle_result(wallet: "Wallet | None") -> None:
             if wallet:
@@ -262,8 +268,15 @@ class AedesApp(App[None]):
                 # Restart orchestrator with wallet
                 if self._orchestrator:
                     asyncio.create_task(self._restart_with_wallet())
+            elif env_wallet_available:
+                # User chose to use .env wallet - executor will use it
+                log = self.query_one("#log-panel", RichLog)
+                log.write("[#89b4fa]Using .env wallet for trading[/]")
 
-        self.push_screen(UnlockModal(self._wallet_manager), handle_result)
+        self.push_screen(
+            UnlockModal(self._wallet_manager, env_wallet_available=env_wallet_available),
+            handle_result,
+        )
 
     def action_toggle_lock(self) -> None:
         """Toggle wallet lock state."""

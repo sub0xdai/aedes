@@ -1,20 +1,37 @@
-"""Modal overlay for wallet unlock/create."""
+"""Wallet wizard modal for unlock/create/import flows."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Literal
 
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Center, Vertical
 from textual.message import Message
+from textual.reactive import reactive
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, Static
 
 from src.wallet import Wallet, WalletManager
 
+# View state type
+ViewState = Literal["choice", "create", "import_key", "import_keystore", "unlock", "success"]
+
 
 class UnlockModal(ModalScreen[Wallet | None]):
-    """Modal screen for unlocking or creating a wallet.
+    """Modal screen for wallet wizard: unlock, create, or import.
 
     Displays a centered dialog over a dimmed background.
     Returns the unlocked Wallet on success, None on cancel.
+
+    Views:
+        - choice: First-run wizard with Create/Import options
+        - create: Create new wallet form
+        - import_key: Import from private key
+        - import_keystore: Import from keystore file
+        - unlock: Unlock existing wallet
+        - success: Show address + QR code
     """
 
     BINDINGS = [
@@ -27,8 +44,9 @@ class UnlockModal(ModalScreen[Wallet | None]):
     }
 
     UnlockModal > Vertical {
-        width: 50;
+        width: 60;
         height: auto;
+        max-height: 90%;
         background: #1e1e2e;
         border: thick #cba6f7;
         padding: 1 2;
@@ -56,6 +74,14 @@ class UnlockModal(ModalScreen[Wallet | None]):
         margin-bottom: 1;
     }
 
+    UnlockModal .wallet-address-full {
+        color: #a6e3a1;
+        text-align: center;
+        width: 100%;
+        margin-bottom: 1;
+        text-style: bold;
+    }
+
     UnlockModal Input {
         width: 100%;
         margin-bottom: 1;
@@ -66,6 +92,18 @@ class UnlockModal(ModalScreen[Wallet | None]):
         height: auto;
         align: center middle;
         margin-top: 1;
+    }
+
+    UnlockModal .choice-buttons {
+        width: 100%;
+        height: auto;
+        align: center middle;
+        margin-top: 1;
+    }
+
+    UnlockModal .choice-buttons Button {
+        width: 100%;
+        margin: 0 0 1 0;
     }
 
     UnlockModal Button {
@@ -90,6 +128,16 @@ class UnlockModal(ModalScreen[Wallet | None]):
         background: #45475a;
     }
 
+    UnlockModal .btn-choice {
+        background: #313244;
+        color: #cdd6f4;
+        width: 100%;
+    }
+
+    UnlockModal .btn-choice:hover {
+        background: #45475a;
+    }
+
     UnlockModal .error-text {
         color: #f38ba8;
         text-align: center;
@@ -103,7 +151,35 @@ class UnlockModal(ModalScreen[Wallet | None]):
         width: 100%;
         margin-top: 1;
     }
+
+    UnlockModal .success-text {
+        color: #a6e3a1;
+        text-align: center;
+        width: 100%;
+        margin-top: 1;
+    }
+
+    UnlockModal .qr-container {
+        width: 100%;
+        height: auto;
+        align: center middle;
+        margin: 1 0;
+    }
+
+    UnlockModal .qr-code {
+        text-align: center;
+    }
+
+    UnlockModal .back-link {
+        color: #6c7086;
+        text-align: center;
+        width: 100%;
+        margin-top: 1;
+    }
     """
+
+    # Reactive view state
+    view: reactive[ViewState] = reactive("choice")
 
     class WalletUnlocked(Message):
         """Emitted when wallet is successfully unlocked."""
@@ -119,81 +195,287 @@ class UnlockModal(ModalScreen[Wallet | None]):
             super().__init__()
             self.wallet = wallet
 
-    def __init__(self, wallet_manager: WalletManager) -> None:
+    def __init__(
+        self,
+        wallet_manager: WalletManager,
+        env_wallet_available: bool = False,
+    ) -> None:
+        """Initialize the wallet wizard.
+
+        Args:
+            wallet_manager: WalletManager instance for operations.
+            env_wallet_available: Whether .env has a valid private key.
+        """
         super().__init__()
         self._wallet_manager = wallet_manager
-        self._mode = "unlock" if wallet_manager.has_wallets() else "create"
+        self._env_wallet_available = env_wallet_available
         self._error = ""
+        self._created_wallet: Wallet | None = None
+
+        # Determine initial view
+        if wallet_manager.has_wallets():
+            self.view = "unlock"
+        else:
+            self.view = "choice"
 
     def compose(self) -> ComposeResult:
+        """Compose the modal content."""
         with Vertical():
-            if self._mode == "unlock":
-                yield Label("UNLOCK WALLET", classes="modal-title")
-                # Show wallet address
-                wallets = self._wallet_manager.list_wallets()
-                if wallets:
-                    addr = wallets[0]["address"]
-                    short = f"{addr[:6]}...{addr[-4:]}"
-                    yield Label(short, classes="wallet-address")
-                yield Label("Enter password to unlock", classes="modal-subtitle")
-                yield Input(placeholder="Password", id="password-input", password=True)
-                with Center(classes="button-row"):
-                    yield Button("Unlock", id="btn-unlock", classes="btn-primary")
-                    yield Button("Cancel", id="btn-cancel", classes="btn-secondary")
-            else:
-                yield Label("CREATE WALLET", classes="modal-title")
-                yield Label("Create a new trading wallet", classes="modal-subtitle")
-                yield Input(
-                    placeholder="Password (8+ characters)",
-                    id="password-input",
-                    password=True,
-                )
-                yield Input(
-                    placeholder="Confirm password",
-                    id="confirm-input",
-                    password=True,
-                )
-                with Center(classes="button-row"):
-                    yield Button("Create", id="btn-create", classes="btn-primary")
-                    yield Button("Cancel", id="btn-cancel", classes="btn-secondary")
+            yield from self._compose_view()
 
-            yield Static("", id="error-label")
+    def _compose_view(self) -> ComposeResult:
+        """Compose content for current view state."""
+        if self.view == "choice":
+            yield from self._compose_choice()
+        elif self.view == "create":
+            yield from self._compose_create()
+        elif self.view == "import_key":
+            yield from self._compose_import_key()
+        elif self.view == "import_keystore":
+            yield from self._compose_import_keystore()
+        elif self.view == "unlock":
+            yield from self._compose_unlock()
+        elif self.view == "success":
+            yield from self._compose_success()
+
+    def _compose_choice(self) -> ComposeResult:
+        """Compose first-run choice screen."""
+        yield Label("WALLET SETUP", classes="modal-title")
+        yield Label("Choose how to set up your trading wallet:", classes="modal-subtitle")
+
+        choice_container = Vertical(classes="choice-buttons")
+        choice_container._add_children(
+            Button("Create New Wallet", id="btn-choice-create", classes="btn-choice"),
+            Button("Import MetaMask Keystore", id="btn-choice-keystore", classes="btn-choice"),
+            Button("Import Private Key", id="btn-choice-key", classes="btn-choice"),
+        )
+        yield choice_container
+
+        if self._env_wallet_available:
+            yield Label("", classes="info-text")
+            yield Button("Use .env Wallet", id="btn-use-env", classes="btn-secondary")
+        else:
+            button_row = Center(classes="button-row")
+            button_row._add_children(Button("Cancel", id="btn-cancel", classes="btn-secondary"))
+            yield button_row
+
+    def _compose_create(self) -> ComposeResult:
+        """Compose create wallet screen."""
+        yield Label("CREATE WALLET", classes="modal-title")
+        yield Label("Create a new trading wallet", classes="modal-subtitle")
+        yield Input(placeholder="Password (8+ characters)", id="password-input", password=True)
+        yield Input(placeholder="Confirm password", id="confirm-input", password=True)
+
+        button_row = Center(classes="button-row")
+        button_row._add_children(
+            Button("Create", id="btn-create", classes="btn-primary"),
+            Button("Back", id="btn-back", classes="btn-secondary"),
+        )
+        yield button_row
+        yield Static("", id="error-label")
+
+    def _compose_import_key(self) -> ComposeResult:
+        """Compose import private key screen."""
+        yield Label("IMPORT PRIVATE KEY", classes="modal-title")
+        yield Label("Paste your private key (hex format)", classes="modal-subtitle")
+        yield Input(placeholder="0x... (64 hex characters)", id="private-key-input", password=True)
+        yield Input(placeholder="Password to encrypt (8+ characters)", id="password-input", password=True)
+        yield Input(placeholder="Confirm password", id="confirm-input", password=True)
+
+        button_row = Center(classes="button-row")
+        button_row._add_children(
+            Button("Import", id="btn-import-key", classes="btn-primary"),
+            Button("Back", id="btn-back", classes="btn-secondary"),
+        )
+        yield button_row
+        yield Static("", id="error-label")
+
+    def _compose_import_keystore(self) -> ComposeResult:
+        """Compose import keystore screen."""
+        yield Label("IMPORT KEYSTORE", classes="modal-title")
+        yield Label("Import a MetaMask JSON keystore file", classes="modal-subtitle")
+        yield Input(placeholder="Path to keystore file", id="keystore-path-input")
+        yield Input(placeholder="Keystore password", id="password-input", password=True)
+
+        button_row = Center(classes="button-row")
+        button_row._add_children(
+            Button("Import", id="btn-import-keystore", classes="btn-primary"),
+            Button("Back", id="btn-back", classes="btn-secondary"),
+        )
+        yield button_row
+        yield Static("", id="error-label")
+
+    def _compose_unlock(self) -> ComposeResult:
+        """Compose unlock existing wallet screen."""
+        yield Label("UNLOCK WALLET", classes="modal-title")
+
+        # Show wallet address
+        wallets = self._wallet_manager.list_wallets()
+        if wallets:
+            addr = wallets[0]["address"]
+            short = f"{addr[:6]}...{addr[-4:]}"
+            yield Label(short, classes="wallet-address")
+
+        yield Label("Enter password to unlock", classes="modal-subtitle")
+        yield Input(placeholder="Password", id="password-input", password=True)
+
+        button_row = Center(classes="button-row")
+        button_row._add_children(
+            Button("Unlock", id="btn-unlock", classes="btn-primary"),
+            Button("Cancel", id="btn-cancel", classes="btn-secondary"),
+        )
+        yield button_row
+        yield Static("", id="error-label")
+
+    def _compose_success(self) -> ComposeResult:
+        """Compose success screen with QR code."""
+        yield Label("WALLET READY", classes="modal-title")
+
+        if self._created_wallet:
+            yield Label("Your deposit address:", classes="modal-subtitle")
+            yield Label(self._created_wallet.address, classes="wallet-address-full")
+
+            # QR code container
+            qr_container = Center(classes="qr-container")
+            qr_container._add_children(Static("", id="qr-code", classes="qr-code"))
+            yield qr_container
+
+            yield Label("Scan with mobile wallet to deposit USDC (Polygon)", classes="info-text")
+
+        button_row = Center(classes="button-row")
+        button_row._add_children(Button("Continue to Trading", id="btn-continue", classes="btn-primary"))
+        yield button_row
+
+    def watch_view(self, old_view: ViewState, new_view: ViewState) -> None:
+        """React to view changes by recomposing."""
+        # Skip if not mounted yet (initial __init__ call)
+        if not self.is_mounted:
+            return
+
+        # Clear and recompose on view change
+        container = self.query_one(Vertical)
+        container.remove_children()
+
+        # Add new content
+        for widget in self._compose_view():
+            container.mount(widget)
+
+        # Focus appropriate input
+        self.call_after_refresh(self._focus_first_input)
+
+        # Generate QR code if success view
+        if new_view == "success" and self._created_wallet:
+            self.call_after_refresh(self._show_qr_code)
+
+    def _focus_first_input(self) -> None:
+        """Focus the first input in current view."""
+        inputs = self.query(Input)
+        if inputs:
+            inputs.first().focus()
+
+    def _show_qr_code(self) -> None:
+        """Generate and display QR code."""
+        if not self._created_wallet:
+            return
+
+        try:
+            qr_text = self._wallet_manager.generate_qr_code(self._created_wallet.address)
+            qr_widget = self.query_one("#qr-code", Static)
+            qr_widget.update(qr_text)
+        except Exception as e:
+            # QR code is optional, don't fail
+            qr_widget = self.query_one("#qr-code", Static)
+            qr_widget.update(f"[dim](QR unavailable: {e})[/]")
 
     def on_mount(self) -> None:
-        """Focus password input on mount."""
-        self.query_one("#password-input", Input).focus()
+        """Focus first input on mount."""
+        self._focus_first_input()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         """Handle Enter key in input."""
-        if self._mode == "unlock":
+        if self.view == "unlock":
             self._do_unlock()
-        elif event.input.id == "password-input":
-            # Focus confirm input
-            self.query_one("#confirm-input", Input).focus()
-        else:
-            self._do_create()
+        elif self.view == "create":
+            if event.input.id == "password-input":
+                self.query_one("#confirm-input", Input).focus()
+            else:
+                self._do_create()
+        elif self.view == "import_key":
+            if event.input.id == "private-key-input":
+                self.query_one("#password-input", Input).focus()
+            elif event.input.id == "password-input":
+                self.query_one("#confirm-input", Input).focus()
+            else:
+                self._do_import_key()
+        elif self.view == "import_keystore":
+            if event.input.id == "keystore-path-input":
+                self.query_one("#password-input", Input).focus()
+            else:
+                self._do_import_keystore()
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle button presses."""
-        if event.button.id == "btn-cancel":
+        button_id = event.button.id
+
+        # Navigation
+        if button_id == "btn-cancel":
             self.dismiss(None)
-        elif event.button.id == "btn-unlock":
+        elif button_id == "btn-back":
+            self.view = "choice"
+        elif button_id == "btn-use-env":
+            # User chose to use .env wallet
+            self.dismiss(None)
+
+        # Choice buttons
+        elif button_id == "btn-choice-create":
+            self.view = "create"
+        elif button_id == "btn-choice-keystore":
+            self.view = "import_keystore"
+        elif button_id == "btn-choice-key":
+            self.view = "import_key"
+
+        # Action buttons
+        elif button_id == "btn-unlock":
             self._do_unlock()
-        elif event.button.id == "btn-create":
+        elif button_id == "btn-create":
             self._do_create()
+        elif button_id == "btn-import-key":
+            self._do_import_key()
+        elif button_id == "btn-import-keystore":
+            self._do_import_keystore()
+        elif button_id == "btn-continue":
+            if self._created_wallet:
+                self.dismiss(self._created_wallet)
+            else:
+                self.dismiss(None)
+
+    def _show_error(self, message: str) -> None:
+        """Display error message."""
+        try:
+            error_label = self.query_one("#error-label", Static)
+            error_label.update(f"[#f38ba8]{message}[/]")
+        except Exception:
+            pass
+
+    def _clear_error(self) -> None:
+        """Clear error message."""
+        try:
+            error_label = self.query_one("#error-label", Static)
+            error_label.update("")
+        except Exception:
+            pass
 
     def _do_unlock(self) -> None:
         """Attempt to unlock wallet."""
         password = self.query_one("#password-input", Input).value
-        error_label = self.query_one("#error-label", Static)
 
         if not password:
-            error_label.update("[#f38ba8]Please enter password[/]")
+            self._show_error("Please enter password")
             return
 
         wallets = self._wallet_manager.list_wallets()
         if not wallets:
-            error_label.update("[#f38ba8]No wallet found[/]")
+            self._show_error("No wallet found")
             return
 
         try:
@@ -201,24 +483,23 @@ class UnlockModal(ModalScreen[Wallet | None]):
             self.post_message(self.WalletUnlocked(wallet))
             self.dismiss(wallet)
         except ValueError:
-            error_label.update("[#f38ba8]Wrong password[/]")
+            self._show_error("Wrong password")
             self.query_one("#password-input", Input).value = ""
             self.query_one("#password-input", Input).focus()
         except Exception as e:
-            error_label.update(f"[#f38ba8]{e}[/]")
+            self._show_error(str(e))
 
     def _do_create(self) -> None:
         """Attempt to create wallet."""
         password = self.query_one("#password-input", Input).value
         confirm = self.query_one("#confirm-input", Input).value
-        error_label = self.query_one("#error-label", Static)
 
         if len(password) < 8:
-            error_label.update("[#f38ba8]Password must be 8+ characters[/]")
+            self._show_error("Password must be 8+ characters")
             return
 
         if password != confirm:
-            error_label.update("[#f38ba8]Passwords do not match[/]")
+            self._show_error("Passwords do not match")
             self.query_one("#confirm-input", Input).value = ""
             self.query_one("#confirm-input", Input).focus()
             return
@@ -228,11 +509,74 @@ class UnlockModal(ModalScreen[Wallet | None]):
 
             name = f"aedes_{int(time.time())}"
             wallet = self._wallet_manager.create_wallet(name, password)
+            self._created_wallet = wallet
             self.post_message(self.WalletCreated(wallet))
-            self.dismiss(wallet)
+            self.view = "success"
         except Exception as e:
-            error_label.update(f"[#f38ba8]{e}[/]")
+            self._show_error(str(e))
+
+    def _do_import_key(self) -> None:
+        """Attempt to import from private key."""
+        private_key = self.query_one("#private-key-input", Input).value
+        password = self.query_one("#password-input", Input).value
+        confirm = self.query_one("#confirm-input", Input).value
+
+        if not private_key:
+            self._show_error("Please enter private key")
+            return
+
+        if len(password) < 8:
+            self._show_error("Password must be 8+ characters")
+            return
+
+        if password != confirm:
+            self._show_error("Passwords do not match")
+            self.query_one("#confirm-input", Input).value = ""
+            self.query_one("#confirm-input", Input).focus()
+            return
+
+        try:
+            wallet = self._wallet_manager.import_from_private_key(private_key, password)
+            self._created_wallet = wallet
+            self.post_message(self.WalletCreated(wallet))
+            self.view = "success"
+        except ValueError as e:
+            self._show_error(str(e))
+        except Exception as e:
+            self._show_error(f"Import failed: {e}")
+
+    def _do_import_keystore(self) -> None:
+        """Attempt to import from keystore file."""
+        keystore_path = self.query_one("#keystore-path-input", Input).value
+        password = self.query_one("#password-input", Input).value
+
+        if not keystore_path:
+            self._show_error("Please enter keystore path")
+            return
+
+        if not password:
+            self._show_error("Please enter password")
+            return
+
+        # Expand path
+        path = Path(keystore_path).expanduser()
+
+        try:
+            wallet = self._wallet_manager.import_from_keystore(path, password)
+            self._created_wallet = wallet
+            self.post_message(self.WalletCreated(wallet))
+            self.view = "success"
+        except FileNotFoundError:
+            self._show_error("Keystore file not found")
+        except ValueError as e:
+            self._show_error(str(e))
+        except Exception as e:
+            self._show_error(f"Import failed: {e}")
 
     def action_cancel(self) -> None:
         """Cancel and close modal."""
         self.dismiss(None)
+
+
+# Alias for backward compatibility
+WalletWizard = UnlockModal

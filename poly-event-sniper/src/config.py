@@ -14,8 +14,9 @@ class PolygonConfig(BaseSettings):
         extra="ignore",
     )
 
-    private_key: SecretStr
-    rpc_url: str
+    # Optional - TUI wallet or .env can provide
+    private_key: SecretStr = SecretStr("")
+    rpc_url: str = "https://polygon-rpc.com"
 
 
 class ClobConfig(BaseSettings):

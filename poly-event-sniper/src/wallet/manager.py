@@ -255,3 +255,198 @@ class WalletManager:
     def set_active_wallet(self, wallet: Wallet) -> None:
         """Set the active wallet."""
         self._active_wallet = wallet
+
+    def wallet_exists(self, address: str) -> bool:
+        """Check if a wallet with the given address already exists.
+
+        Args:
+            address: Ethereum address (with or without 0x prefix).
+
+        Returns:
+            True if wallet exists, False otherwise.
+        """
+        # Normalize to lowercase first to handle 0X prefix
+        address = address.lower()
+        if not address.startswith("0x"):
+            address = f"0x{address}"
+
+        keystore_path = self._wallet_dir / f"{address}.json"
+        return keystore_path.exists()
+
+    def import_from_private_key(
+        self, private_key: str, password: str, name: str | None = None
+    ) -> Wallet:
+        """Import wallet from a raw private key.
+
+        Args:
+            private_key: Hex private key (with or without 0x prefix).
+            password: Password to encrypt the new keystore.
+            name: Optional name for the wallet.
+
+        Returns:
+            The imported Wallet object (unlocked).
+
+        Raises:
+            ValueError: If private key is invalid.
+            ValueError: If password is too short.
+            ValueError: If wallet with same address already exists.
+        """
+        if len(password) < 8:
+            raise ValueError("Password must be at least 8 characters")
+
+        # Normalize key - add 0x if missing
+        if not private_key.startswith("0x"):
+            private_key = f"0x{private_key}"
+
+        # Validate key format (should be 0x + 64 hex chars)
+        if len(private_key) != 66:
+            raise ValueError("Private key must be 64 hex characters (with 0x prefix)")
+
+        try:
+            int(private_key, 16)
+        except ValueError as e:
+            raise ValueError("Private key must be valid hexadecimal") from e
+
+        # Create account from key
+        try:
+            account: LocalAccount = Account.from_key(private_key)
+        except Exception as e:
+            raise ValueError(f"Invalid private key: {e}") from e
+
+        # Check for duplicate
+        if self.wallet_exists(account.address):
+            raise ValueError(f"Wallet already exists: {account.address}")
+
+        # Generate name if not provided
+        if name is None:
+            import time
+            name = f"imported_{int(time.time())}"
+
+        # Create keystore (encrypted)
+        keystore = account.encrypt(password)
+        keystore["name"] = name
+
+        # Save to file
+        keystore_path = self._wallet_dir / f"{account.address.lower()}.json"
+        with open(keystore_path, "w") as f:
+            json.dump(keystore, f, indent=2)
+
+        logger.info("Imported wallet from private key: {} ({})", name, account.address)
+
+        wallet = Wallet(
+            name=name,
+            address=account.address,
+            private_key=private_key,
+        )
+
+        self._active_wallet = wallet
+        return wallet
+
+    def import_from_keystore(
+        self, keystore_path: Path | str, password: str, name: str | None = None
+    ) -> Wallet:
+        """Import wallet from an existing keystore JSON file (MetaMask export).
+
+        Args:
+            keystore_path: Path to the JSON keystore file.
+            password: Password to decrypt the keystore.
+            name: Optional name for the wallet (defaults to original or filename).
+
+        Returns:
+            The imported Wallet object (unlocked).
+
+        Raises:
+            FileNotFoundError: If keystore file doesn't exist.
+            ValueError: If keystore is invalid or password is wrong.
+            ValueError: If wallet with same address already exists.
+        """
+        keystore_path = Path(keystore_path)
+        if not keystore_path.exists():
+            raise FileNotFoundError(f"Keystore file not found: {keystore_path}")
+
+        # Load and validate keystore
+        try:
+            with open(keystore_path) as f:
+                keystore: dict[str, Any] = json.load(f)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid keystore JSON: {e}") from e
+
+        # Validate required fields
+        if "crypto" not in keystore and "Crypto" not in keystore:
+            raise ValueError("Invalid keystore: missing 'crypto' field")
+        if "address" not in keystore:
+            raise ValueError("Invalid keystore: missing 'address' field")
+
+        # Decrypt to verify password
+        try:
+            private_key_bytes = Account.decrypt(keystore, password)
+        except ValueError as e:
+            raise ValueError(f"Wrong password or corrupted keystore: {e}") from e
+
+        # Get address
+        address = keystore["address"].lower()
+        if not address.startswith("0x"):
+            address = f"0x{address}"
+
+        # Check for duplicate
+        if self.wallet_exists(address):
+            raise ValueError(f"Wallet already exists: {address}")
+
+        # Determine name
+        if name is None:
+            name = keystore.get("name") or keystore_path.stem
+
+        # Re-encrypt with same password (to add our metadata format)
+        private_key_hex = f"0x{private_key_bytes.hex()}"
+        account = Account.from_key(private_key_hex)
+        new_keystore = account.encrypt(password)
+        new_keystore["name"] = name
+
+        # Save to our wallet directory
+        dest_path = self._wallet_dir / f"{address}.json"
+        with open(dest_path, "w") as f:
+            json.dump(new_keystore, f, indent=2)
+
+        logger.info("Imported wallet from keystore: {} ({})", name, address)
+
+        wallet = Wallet(
+            name=name,
+            address=account.address,
+            private_key=private_key_hex,
+        )
+
+        self._active_wallet = wallet
+        return wallet
+
+    def generate_qr_code(self, address: str | None = None) -> str:
+        """Generate terminal QR code for the given address.
+
+        Args:
+            address: Ethereum address to encode. If None, uses active wallet.
+
+        Returns:
+            ASCII/Unicode string representation of QR code.
+
+        Raises:
+            ValueError: If no address provided and no active wallet.
+        """
+        if address is None:
+            if self._active_wallet is None:
+                raise ValueError("No address provided and no active wallet")
+            address = self._active_wallet.address
+
+        try:
+            import segno
+        except ImportError as e:
+            raise ImportError("segno package required for QR codes") from e
+
+        import io
+
+        # Create QR with ethereum URI format for wallet compatibility
+        uri = f"ethereum:{address}"
+        qr = segno.make(uri)
+
+        # Capture terminal output to string
+        buffer = io.StringIO()
+        qr.terminal(out=buffer, compact=True)
+        return buffer.getvalue()
