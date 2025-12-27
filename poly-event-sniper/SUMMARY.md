@@ -1,6 +1,9 @@
 # Aedes - Polymarket Event Sniper
 
-**Tests:** 339 passing | **Status:** Phase 10 complete (Wallet Wizard UX)
+**Tests:** 338 passing | **Status:** Phase 12 complete (Wallet Dashboard + Bug Fixes)
+
+> **Geo-Blocking Notice:** Polymarket is blocked in Australia, USA, and other regions.
+> You must deploy to a VPS in a supported region (UK, EU, etc.). See [docs/DEPLOY.md](docs/DEPLOY.md).
 
 ## What It Does
 
@@ -10,31 +13,80 @@ Algorithmic trading bot for Polymarket prediction markets. Monitors price feeds 
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│ AEDES  ● Connected  DRY RUN    │  Wallet: 0x1234...5678 $42.50       │
+│ AEDES  ■ IDLE  DRY RUN         │  Wallet: 0x1234...5678 $42.50       │
 ├────────────────────────────────┬─────────────────────────────────────┤
-│                                │ STRATEGIES          (50%)           │
-│       LOG PANEL                │ Threshold: 1 / Keyword: 1           │
+│                                │ WALLET                              │
+│                                │ Balance: $42.50                     │
+│                                │ PnL: +$3.25                         │
+│       LOG PANEL                │ Positions: 2                        │
 │       (live feed)              │ METRICS                             │
-│                                │ Events: 0 / Signals: 0 / Trades: 0  │
+│                                │ Discovered: 35 / Signals: 0         │
 │                                ├─────────────────────────────────────┤
-│                                │ RECENT TRADES       (50%)           │
-│                                │ (none)                              │
+│                                │ POSITIONS                           │
+│                                │ Token   Entry  Now    PnL           │
+│                                │ 8a3f... 0.25   0.31  +$0.60         │
+│                                ├─────────────────────────────────────┤
+│                                │ RECENT TRADES                       │
+│                                │ BUY 8a3f... @ 0.25 ✓                │
 ├────────────────────────────────┴─────────────────────────────────────┤
-│ q Quit  c Clear  u Lock/Unlock  w Wallets                            │
+│ q Quit  s Start/Stop  d Discover  c Clear  w Wallets                 │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
+**Trading states:** IDLE (yellow) → press `s` → RUNNING (green) → press `s` → IDLE
+
 **On startup:** Wallet wizard modal with Create/Import options. QR code for funding on success.
+
+---
+
+## Recent Changes (Phase 12)
+
+| Component | Description |
+|-----------|-------------|
+| **Wallet Dashboard** | 3-way sidebar split: Wallet summary, Positions table, Recent trades |
+| **Balance Display** | Shows wallet balance, PnL, position count in sidebar |
+| **Positions Panel** | Compact 4-column table (Token, Entry, Now, PnL) |
+| **Gamma API Fix** | Fixed response parsing - API returns raw list, not wrapped object |
+| **Discovery Fix** | Added `closed=false` param to get active tradeable markets |
+| **Deployment Guide** | Added `docs/DEPLOY.md` for VPS deployment (geo-blocking workaround) |
+
+---
+
+## Recent Changes (Phase 11)
+
+| Component | Description |
+|-----------|-------------|
+| **Smart Discovery** | 8 auto-discovery strategies with lowered thresholds |
+| **On-Demand Discovery** | Press `d` to discover new markets anytime |
+| **Discovered Counter** | Sidebar shows total discovered markets |
+| **No Static Rules** | Threshold/Keyword rules now empty - discovery handles all |
+
+### Discovery Strategies
+
+| Strategy | Volume | Trigger | Position |
+|----------|--------|---------|----------|
+| high_volume_buys | $10k | BUY < 0.25 | $1.50 |
+| high_volume_sells | $10k | SELL > 0.75 | $1.50 |
+| crypto | $5k | BUY < 0.20 | $1.50 |
+| politics | $15k | BUY < 0.15 | $2.00 |
+| sports | $5k | BUY < 0.20 | $1.00 |
+| entertainment | $5k | BUY < 0.25 | $1.00 |
+| science | $3k | BUY < 0.20 | $1.00 |
+| business | $5k | BUY < 0.20 | $1.50 |
+
+---
 
 ## Recent Changes (Phase 10)
 
 | Component | Description |
 |-----------|-------------|
+| **Start/Stop Control** | Press `s` to start/stop trading - no auto-start |
+| **Trading Status** | Header shows IDLE/RUNNING/STOPPED status clearly |
+| **Password-free Wallets** | No passwords required - wallets stored as plain JSON |
 | **WalletWizard** | First-run wizard: Create / Import Keystore / Import Private Key |
 | **QR Code Funding** | Terminal QR code for mobile wallet deposits (segno) |
 | **Import Methods** | `import_from_keystore()`, `import_from_private_key()` in WalletManager |
 | **.env Fallback** | Power users can bypass TUI wallet with POLYGON_PRIVATE_KEY |
-| **Optional Config** | POLYGON_PRIVATE_KEY now optional (TUI-first mode) |
 | **Wallet Hotkey** | Press `w` to manage/switch wallets during runtime |
 
 ## Wallet Wizard Flow
@@ -115,9 +167,11 @@ uv run pytest -v                  # Run tests
 | Key | Action |
 |-----|--------|
 | `q` | Quit application |
+| `s` | Start/Stop trading |
+| `d` | Discover new markets |
 | `c` | Clear log panel |
-| `u` | Lock/Unlock current wallet |
 | `w` | Open wallet management |
+| `Esc` | Close help panel |
 
 ## Test Coverage
 
@@ -129,9 +183,9 @@ uv run pytest -v                  # Run tests
 | Portfolio & strategies | 76 |
 | Persistence & database | 28 |
 | TUI & callbacks | 21 |
-| Wallet management | 36 |
+| Wallet management | 34 |
 | Integration | 43 |
-| **Total** | **339** |
+| **Total** | **338** |
 
 ## File Structure
 
@@ -143,7 +197,7 @@ src/
 │       ├── global_header.py   # Header with wallet info
 │       ├── unlock_modal.py    # Wallet wizard (create/import/unlock/manage)
 │       └── qr_display.py      # Terminal QR code widget
-├── wallet/manager.py          # Wallet create/import/load/encrypt
+├── wallet/manager.py          # Wallet create/import/load (plain JSON storage)
 ├── executors/polymarket.py    # CLOB client, auto-derive credentials
 ├── ingesters/polymarket.py    # WebSocket with array payload handling
 ├── discovery/                 # Gamma API client

@@ -55,6 +55,7 @@ class MarketCriteria(BaseModel):
 
         if self.active_only:
             params["active"] = "true"
+            params["closed"] = "false"  # Must also filter out closed markets
 
         # Note: min_volume, min_liquidity, keywords are client-side filters
         # as Gamma API may not support all filters server-side

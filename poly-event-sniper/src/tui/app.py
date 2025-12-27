@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 from textual.app import App, ComposeResult
+from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Footer, Label, RichLog
 from textual.worker import Worker
@@ -13,6 +14,7 @@ from textual.worker import Worker
 from src.callbacks import OrchestratorCallback
 from src.models import ExecutionResult, OrderStatus, Position, Side, TradeSignal
 from src.tui.widgets.global_header import GlobalHeader
+from src.tui.widgets.positions import PositionsPanel
 from src.tui.widgets.unlock_modal import UnlockModal
 from src.wallet import WalletManager
 
@@ -100,18 +102,27 @@ class AedesApp(App[None]):
         height: 100%;
     }
 
-    /* Stats panel - top 50% */
-    #stats-panel {
+    /* Wallet panel - top */
+    #wallet-panel {
         border: round #313244;
-        height: 50%;
+        height: auto;
         padding: 1;
         background: #1e1e2e;
     }
 
-    /* Trades panel - bottom 50% */
+    /* Positions panel - middle (flexible) */
+    #positions-panel {
+        border: round #313244;
+        height: 1fr;
+        padding: 1;
+        background: #1e1e2e;
+    }
+
+    /* Trades panel - bottom */
     #trades-panel {
         border: round #313244;
-        height: 50%;
+        height: auto;
+        max-height: 8;
         padding: 1;
         background: #1e1e2e;
     }
@@ -167,9 +178,11 @@ class AedesApp(App[None]):
 
     BINDINGS = [
         ("q", "quit", "Quit"),
+        ("s", "toggle_trading", "Start/Stop"),
+        ("d", "discover_markets", "Discover"),
         ("c", "clear_logs", "Clear"),
-        ("u", "toggle_lock", "Lock/Unlock"),
         ("w", "manage_wallets", "Wallets"),
+        Binding("escape", "hide_help_panel", "Close", show=False),
     ]
 
     def __init__(self, demo_mode: bool = False) -> None:
@@ -182,6 +195,11 @@ class AedesApp(App[None]):
         self._trade_count = 0
         self._wallet_manager = WalletManager()
         self._active_wallet: "Wallet | None" = None
+        self._trading_active = False  # User must press 's' to start
+        # Discovery components - stored for on-demand discovery
+        self._poly_ingester = None
+        self._price_parser = None
+        self._discovered_count = 0
 
     def compose(self) -> ComposeResult:
         # Global header
@@ -191,20 +209,26 @@ class AedesApp(App[None]):
             # Expanded log panel
             yield RichLog(id="log-panel", highlight=True, markup=True, auto_scroll=True)
 
-            # Compact sidebar (no wallet panel - moved to header)
+            # Sidebar - 3-way split: Wallet, Positions, Trades
             with Vertical(id="sidebar"):
-                # Stats panel - 50%
-                with Vertical(id="stats-panel"):
-                    yield Label("STRATEGIES", classes="section-title")
-                    yield Label("Threshold: 0", id="threshold-rules", classes="label-value")
-                    yield Label("Keyword: 0", id="keyword-rules", classes="label-value")
+                # Wallet summary section (top)
+                with Vertical(id="wallet-panel"):
+                    yield Label("WALLET", classes="section-title")
+                    yield Label("Balance: $0.00", id="wallet-balance", classes="label-value")
+                    yield Label("PnL: $0.00", id="wallet-pnl", classes="label-value")
+                    yield Label("Positions: 0", id="position-count", classes="label-value")
                     yield Label("")
                     yield Label("METRICS", classes="section-title")
-                    yield Label("Events: 0", id="events", classes="label-value")
+                    yield Label("Discovered: 0", id="discovered-markets", classes="label-value")
                     yield Label("Signals: 0", id="signals", classes="label-value")
                     yield Label("Trades: 0", id="trades", classes="label-value")
 
-                # Trades panel - 50%
+                # Positions table (middle)
+                with Vertical(id="positions-panel"):
+                    yield Label("POSITIONS", classes="section-title")
+                    yield PositionsPanel(id="positions-table-widget")
+
+                # Recent trades (bottom)
                 with Vertical(id="trades-panel"):
                     yield Label("RECENT TRADES", classes="section-title")
                     yield Label("(none)", id="trade-list", classes="label-muted")
@@ -222,31 +246,36 @@ class AedesApp(App[None]):
             await self._start_live_mode_init(log, header)
 
     async def _start_live_mode_init(self, log: RichLog, header: GlobalHeader) -> None:
-        """Initialize live mode."""
+        """Initialize live mode - show wallet modal, wait for user to start."""
         from src.config import get_settings
 
         settings = get_settings()
         header.set_dry_run(settings.bot.dry_run)
+        header.set_trading_status("idle")
 
         log.write("[bold #f9e2af]AEDES[/] - Polymarket Event Sniper")
         log.write("")
 
-        # Check if wallet needs unlock
-        if self._wallet_manager.has_wallets():
-            log.write("[#6c7086]Wallet found - showing unlock dialog...[/]")
-            # Show unlock modal
+        # Check for .env wallet first
+        env_key = settings.polygon.private_key.get_secret_value()
+        if env_key and len(env_key) >= 64:
+            log.write("[#89b4fa]Using .env wallet for trading[/]")
+            # Create a temporary wallet object for display
+            from eth_account import Account
+            account = Account.from_key(env_key)
+            header.set_wallet(account.address, 0.0)
+            log.write(f"[#a6e3a1]Wallet: {account.address[:6]}...{account.address[-4:]}[/]")
+        elif self._wallet_manager.has_wallets():
+            log.write("[#6c7086]Select a wallet to begin...[/]")
             self._show_unlock_modal()
         else:
-            log.write("[#6c7086]No wallet - showing create dialog...[/]")
-            # Show create modal
+            log.write("[#6c7086]Create or import a wallet to begin...[/]")
             self._show_unlock_modal()
 
-        log.write(f"[#6c7086]Mode: {'DRY RUN' if settings.bot.dry_run else 'LIVE'}[/]")
-        log.write("[#6c7086]Starting market feed...[/]")
         log.write("")
-
-        # Start orchestrator (view-only until wallet unlocked)
-        await self._start_live_mode(log)
+        log.write(f"[#6c7086]Mode: {'DRY RUN' if settings.bot.dry_run else 'LIVE'}[/]")
+        log.write("[#f9e2af]Press 's' to start trading[/]")
+        log.write("")
 
     def _handle_wallet_change(self, wallet: "Wallet | None", env_fallback: bool = False) -> None:
         """Handle wallet change from modal.
@@ -255,21 +284,22 @@ class AedesApp(App[None]):
             wallet: The new wallet, or None if cancelled.
             env_fallback: Whether .env wallet is available as fallback.
         """
+        log = self.query_one("#log-panel", RichLog)
+        header = self.query_one("#global-header", GlobalHeader)
+
         if wallet:
             self._active_wallet = wallet
-            header = self.query_one("#global-header", GlobalHeader)
             header.set_wallet(wallet.address, 0.0)
-
-            log = self.query_one("#log-panel", RichLog)
             log.write(f"[#a6e3a1]Wallet active: {wallet.short_address}[/]")
 
-            # Restart orchestrator with wallet
-            if self._orchestrator:
+            # If trading was running, restart with new wallet
+            if self._trading_active and self._orchestrator:
                 asyncio.create_task(self._restart_with_wallet())
+            else:
+                log.write("[#f9e2af]Press 's' to start trading[/]")
         elif env_fallback:
-            # User chose to use .env wallet - executor will use it
-            log = self.query_one("#log-panel", RichLog)
             log.write("[#89b4fa]Using .env wallet for trading[/]")
+            log.write("[#f9e2af]Press 's' to start trading[/]")
 
     def _show_unlock_modal(self, initial_view: str | None = None) -> None:
         """Show the unlock/create wallet modal.
@@ -296,24 +326,101 @@ class AedesApp(App[None]):
             handle_result,
         )
 
-    def action_toggle_lock(self) -> None:
-        """Toggle wallet lock state."""
-        if self._active_wallet:
-            # Lock wallet
-            self._active_wallet = None
-            self._wallet_manager._active_wallet = None
-            header = self.query_one("#global-header", GlobalHeader)
-            header.clear_wallet()
-
-            log = self.query_one("#log-panel", RichLog)
-            log.write("[#f9e2af]Wallet locked[/]")
+    def action_toggle_trading(self) -> None:
+        """Toggle trading on/off."""
+        if self._trading_active:
+            # Stop trading
+            asyncio.create_task(self._stop_trading())
         else:
-            # Show unlock modal
+            # Start trading
+            asyncio.create_task(self._start_trading())
+
+    async def _start_trading(self) -> None:
+        """Start the trading orchestrator."""
+        log = self.query_one("#log-panel", RichLog)
+        header = self.query_one("#global-header", GlobalHeader)
+
+        # Check if we have a wallet (either from TUI or .env)
+        from src.config import get_settings
+        settings = get_settings()
+        env_key = settings.polygon.private_key.get_secret_value()
+        has_env_wallet = env_key and len(env_key) >= 64
+
+        if not self._active_wallet and not has_env_wallet:
+            log.write("[#f38ba8]No wallet configured. Create or import a wallet first.[/]")
             self._show_unlock_modal()
+            return
+
+        log.write("[#a6e3a1]Starting trading...[/]")
+        header.set_trading_status("running")
+        self._trading_active = True
+
+        try:
+            await self._start_live_mode(log)
+            log.write("[#a6e3a1]Trading active - monitoring markets[/]")
+        except Exception as e:
+            log.write(f"[#f38ba8]Failed to start: {e}[/]")
+            header.set_trading_status("stopped")
+            self._trading_active = False
+
+    async def _stop_trading(self) -> None:
+        """Stop the trading orchestrator."""
+        log = self.query_one("#log-panel", RichLog)
+        header = self.query_one("#global-header", GlobalHeader)
+
+        log.write("[#f9e2af]Stopping trading...[/]")
+
+        if self._orchestrator:
+            await self._orchestrator.stop()
+            self._orchestrator = None
+
+        if self._orchestrator_worker:
+            self._orchestrator_worker.cancel()
+            self._orchestrator_worker = None
+
+        self._trading_active = False
+        header.set_trading_status("idle")
+        log.write("[#6c7086]Trading stopped. Press 's' to restart.[/]")
 
     def action_manage_wallets(self) -> None:
         """Open wallet management modal."""
         self._show_unlock_modal(initial_view="manage")
+
+    def action_discover_markets(self) -> None:
+        """Trigger on-demand market discovery."""
+        asyncio.create_task(self._run_discovery())
+
+    async def _run_discovery(self) -> None:
+        """Run market discovery using stored ingester/parser refs."""
+        log = self.query_one("#log-panel", RichLog)
+
+        if not self._poly_ingester or not self._price_parser:
+            log.write("[#f9e2af]Discovery requires active trading session. Press 's' first.[/]")
+            return
+
+        log.write("[#89b4fa]Discovering markets...[/]")
+
+        try:
+            from src.discovery import GammaClient
+            from src.managers import SubscriptionManager
+
+            discovery_strategies = self._load_discovery_strategies()
+
+            async with GammaClient() as gamma_client:
+                manager = SubscriptionManager(
+                    client=gamma_client,
+                    ingester=self._poly_ingester,
+                    parser=self._price_parser,
+                    global_limit=50,
+                )
+                discovered = await manager.execute_strategies(discovery_strategies)
+                self._discovered_count += discovered
+                self.query_one("#discovered-markets", Label).update(
+                    f"Discovered: {self._discovered_count}"
+                )
+                log.write(f"[#a6e3a1]Discovered {discovered} new markets (total: {self._discovered_count})[/]")
+        except Exception as e:
+            log.write(f"[#f38ba8]Discovery failed: {e}[/]")
 
     def on_unlock_modal_wallet_unlocked(self, event: UnlockModal.WalletUnlocked) -> None:
         """Handle wallet unlock from modal."""
@@ -469,12 +576,11 @@ class AedesApp(App[None]):
         rss_feeds = self._load_rss_feeds()
         discovery_strategies = self._load_discovery_strategies()
 
-        self.query_one("#threshold-rules", Label).update(f"Threshold: {len(threshold_rules)}")
-        self.query_one("#keyword-rules", Label).update(f"Keyword: {len(keyword_rules)}")
-
         log.write(f"[#6c7086]Rules: {len(threshold_rules)} threshold, {len(keyword_rules)} keyword[/]")
 
         poly_ingester = PolymarketIngester()
+        # Store reference for on-demand discovery
+        self._poly_ingester = poly_ingester
 
         if threshold_rules:
             token_ids = list({rule.token_id for rule in threshold_rules})
@@ -482,6 +588,8 @@ class AedesApp(App[None]):
             log.write(f"[#6c7086]Subscribed: {len(token_ids)} tokens[/]")
 
         price_parser = PriceThresholdParser(threshold_rules)
+        # Store reference for on-demand discovery
+        self._price_parser = price_parser
 
         if discovery_strategies:
             log.write("[#6c7086]Discovery...[/]")
@@ -494,6 +602,8 @@ class AedesApp(App[None]):
                         global_limit=50,
                     )
                     discovered = await manager.execute_strategies(discovery_strategies)
+                    self._discovered_count = discovered
+                    self.query_one("#discovered-markets", Label).update(f"Discovered: {discovered}")
                     log.write(f"[#a6e3a1]Discovered {discovered} markets[/]")
             except Exception as e:
                 log.write(f"[#f9e2af]Discovery failed: {e}[/]")
@@ -519,6 +629,19 @@ class AedesApp(App[None]):
             max_position_size=settings.bot.max_position_size,
             private_key=private_key,
         )
+
+        # Initialize executor and fetch balance
+        try:
+            await executor.setup()
+            balance = await executor.get_balance()
+            self.update_wallet_info(balance, 0.0, 0)
+            log.write(f"[#a6e3a1]Balance: ${balance:,.2f} USDC[/]")
+        except Exception as e:
+            log.write(f"[#f9e2af]Balance fetch failed: {e}[/]")
+            log.write("[#6c7086]Tip: Try setting CLOB_API_KEY/SECRET/PASSPHRASE in .env[/]")
+            # Show N/A for balance instead of $0
+            self.query_one("#wallet-balance", Label).update("Balance: N/A")
+
         trade_logger = TradeLogger()
 
         return Orchestrator(
@@ -553,13 +676,42 @@ class AedesApp(App[None]):
 
     def update_metrics(self, metrics: dict[str, int]) -> None:
         """Update metrics display."""
-        self.query_one("#events", Label).update(f"Events: {metrics.get('events_processed', 0):,}")
         self.query_one("#signals", Label).update(f"Signals: {metrics.get('signals_generated', 0):,}")
         self.query_one("#trades", Label).update(f"Trades: {metrics.get('trades_executed', 0):,}")
 
     def update_position(self, position: Position) -> None:
-        """Update position (Phase 7)."""
-        pass
+        """Update position in the positions panel."""
+        try:
+            positions_panel = self.query_one("#positions-table-widget", PositionsPanel)
+            positions_panel.update_position(position)
+            # Update position count
+            count = len(positions_panel._positions)
+            self.query_one("#position-count", Label).update(f"Positions: {count}")
+        except Exception:
+            pass
+
+    def update_wallet_info(self, balance: float, pnl: float, position_count: int) -> None:
+        """Update wallet summary in sidebar."""
+        try:
+            self.query_one("#wallet-balance", Label).update(f"Balance: ${balance:,.2f}")
+            pnl_color = "#a6e3a1" if pnl >= 0 else "#f38ba8"
+            pnl_sign = "+" if pnl >= 0 else ""
+            self.query_one("#wallet-pnl", Label).update(
+                f"PnL: [bold {pnl_color}]{pnl_sign}${pnl:,.2f}[/]"
+            )
+            self.query_one("#position-count", Label).update(f"Positions: {position_count}")
+        except Exception:
+            pass
+
+    def remove_position(self, token_id: str) -> None:
+        """Remove a closed position from the panel."""
+        try:
+            positions_panel = self.query_one("#positions-table-widget", PositionsPanel)
+            positions_panel.remove_position(token_id)
+            count = len(positions_panel._positions)
+            self.query_one("#position-count", Label).update(f"Positions: {count}")
+        except Exception:
+            pass
 
     def action_clear_logs(self) -> None:
         """Clear logs."""
@@ -583,33 +735,12 @@ class AedesApp(App[None]):
         self.exit()
 
     def _load_threshold_rules(self) -> list["ThresholdRule"]:
-        from src.models import ThresholdRule
-
-        return [
-            ThresholdRule(
-                token_id="72764351885425491292910818593903116970287593848365163845719951278848564016561",
-                trigger_side=Side.BUY,
-                threshold=0.95,
-                comparison="below",
-                size_usdc=2.0,
-                reason_template="BTC $100k dip buy",
-                cooldown_seconds=300.0,
-            ),
-        ]
+        # Discovery handles market selection now - no static rules needed
+        return []
 
     def _load_keyword_rules(self) -> list["KeywordRule"]:
-        from src.parsers.keyword import KeywordRule
-
-        return [
-            KeywordRule(
-                keyword="Epstein",
-                token_id="86076435751570733286369126634541849471627178793773765844822295389135259614946",
-                trigger_side=Side.BUY,
-                size_usdc=1.5,
-                reason_template="Epstein news: {keyword}",
-                cooldown_seconds=600.0,
-            ),
-        ]
+        # No static keyword rules - discovery handles market selection
+        return []
 
     def _load_rss_feeds(self) -> list[str]:
         return [
@@ -621,12 +752,82 @@ class AedesApp(App[None]):
         from src.discovery import DiscoveryStrategy, MarketCriteria, RuleTemplate
 
         return [
+            # High volume - any market
             DiscoveryStrategy(
-                name="crypto_dips",
+                name="high_volume_buys",
+                criteria=MarketCriteria(
+                    tags=[],
+                    min_volume=10000.0,
+                    min_liquidity=2000.0,
+                    active_only=True,
+                ),
+                rule_template=RuleTemplate(
+                    trigger_side="BUY",
+                    threshold=0.25,
+                    comparison="below",
+                    size_usdc=1.5,
+                    cooldown_seconds=300.0,
+                ),
+                max_markets=10,
+            ),
+            DiscoveryStrategy(
+                name="high_volume_sells",
+                criteria=MarketCriteria(
+                    tags=[],
+                    min_volume=10000.0,
+                    min_liquidity=2000.0,
+                    active_only=True,
+                ),
+                rule_template=RuleTemplate(
+                    trigger_side="SELL",
+                    threshold=0.75,
+                    comparison="above",
+                    size_usdc=1.5,
+                    cooldown_seconds=300.0,
+                ),
+                max_markets=10,
+            ),
+            # Category-specific strategies
+            DiscoveryStrategy(
+                name="crypto",
                 criteria=MarketCriteria(
                     tags=["crypto"],
-                    min_volume=50000.0,
-                    min_liquidity=10000.0,
+                    min_volume=5000.0,
+                    min_liquidity=1000.0,
+                    active_only=True,
+                ),
+                rule_template=RuleTemplate(
+                    trigger_side="BUY",
+                    threshold=0.20,
+                    comparison="below",
+                    size_usdc=1.5,
+                    cooldown_seconds=300.0,
+                ),
+                max_markets=5,
+            ),
+            DiscoveryStrategy(
+                name="politics",
+                criteria=MarketCriteria(
+                    tags=["politics"],
+                    min_volume=15000.0,
+                    min_liquidity=3000.0,
+                    active_only=True,
+                ),
+                rule_template=RuleTemplate(
+                    trigger_side="BUY",
+                    threshold=0.15,
+                    comparison="below",
+                    size_usdc=2.0,
+                    cooldown_seconds=600.0,
+                ),
+                max_markets=5,
+            ),
+            DiscoveryStrategy(
+                name="sports",
+                criteria=MarketCriteria(
+                    tags=["sports"],
+                    min_volume=5000.0,
+                    min_liquidity=1000.0,
                     active_only=True,
                 ),
                 rule_template=RuleTemplate(
@@ -634,6 +835,57 @@ class AedesApp(App[None]):
                     threshold=0.20,
                     comparison="below",
                     size_usdc=1.0,
+                    cooldown_seconds=300.0,
+                ),
+                max_markets=5,
+            ),
+            DiscoveryStrategy(
+                name="entertainment",
+                criteria=MarketCriteria(
+                    tags=["entertainment"],
+                    min_volume=5000.0,
+                    min_liquidity=1000.0,
+                    active_only=True,
+                ),
+                rule_template=RuleTemplate(
+                    trigger_side="BUY",
+                    threshold=0.25,
+                    comparison="below",
+                    size_usdc=1.0,
+                    cooldown_seconds=300.0,
+                ),
+                max_markets=5,
+            ),
+            DiscoveryStrategy(
+                name="science",
+                criteria=MarketCriteria(
+                    tags=["science"],
+                    min_volume=3000.0,
+                    min_liquidity=500.0,
+                    active_only=True,
+                ),
+                rule_template=RuleTemplate(
+                    trigger_side="BUY",
+                    threshold=0.20,
+                    comparison="below",
+                    size_usdc=1.0,
+                    cooldown_seconds=300.0,
+                ),
+                max_markets=5,
+            ),
+            DiscoveryStrategy(
+                name="business",
+                criteria=MarketCriteria(
+                    tags=["business"],
+                    min_volume=5000.0,
+                    min_liquidity=1000.0,
+                    active_only=True,
+                ),
+                rule_template=RuleTemplate(
+                    trigger_side="BUY",
+                    threshold=0.20,
+                    comparison="below",
+                    size_usdc=1.5,
                     cooldown_seconds=300.0,
                 ),
                 max_markets=5,

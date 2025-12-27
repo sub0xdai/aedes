@@ -1,11 +1,11 @@
-"""Wallet management with secure keystore storage.
+"""Wallet management with simple JSON storage.
 
-Uses Ethereum's Web3 Secret Storage (keystore) format for encrypted wallet storage.
-This is the same format used by MetaMask, Geth, and other Ethereum wallets.
+Stores wallets as plain JSON files with name, address, and private key.
+This is appropriate for a local TUI application where file system access
+implies full access to the wallet anyway.
 """
 
 import json
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -17,7 +17,7 @@ from loguru import logger
 
 @dataclass
 class Wallet:
-    """Represents an unlocked wallet ready for use."""
+    """Represents a wallet ready for use."""
 
     name: str
     address: str
@@ -32,14 +32,14 @@ class Wallet:
 class WalletManager:
     """Manages wallet creation, storage, and retrieval.
 
-    Wallets are stored in Ethereum keystore format (encrypted JSON files).
-    Each wallet file is named by its address and contains encrypted private key.
+    Wallets are stored as simple JSON files with name, address, and private key.
+    Each wallet file is named by its address.
 
     Usage:
         manager = WalletManager()
 
         # Create new wallet
-        wallet = manager.create_wallet("trading_bot", "my_password")
+        wallet = manager.create_wallet("trading_bot")
         print(f"Deposit address: {wallet.address}")
 
         # List wallets
@@ -47,7 +47,7 @@ class WalletManager:
             print(addr)
 
         # Load wallet
-        wallet = manager.load_wallet("0x123...", "my_password")
+        wallet = manager.load_wallet("0x123...")
 
         # Export private key (for MetaMask import)
         print(wallet.private_key)
@@ -59,7 +59,7 @@ class WalletManager:
         """Initialize wallet manager.
 
         Args:
-            wallet_dir: Directory to store wallet keystores.
+            wallet_dir: Directory to store wallet files.
                        Defaults to data/wallets/
         """
         self._wallet_dir = wallet_dir or self.DEFAULT_WALLET_DIR
@@ -76,42 +76,36 @@ class WalletManager:
         """Get the currently active wallet."""
         return self._active_wallet
 
-    def create_wallet(self, name: str, password: str) -> Wallet:
-        """Create a new wallet with encrypted keystore.
+    def create_wallet(self, name: str) -> Wallet:
+        """Create a new wallet.
 
         Args:
             name: Human-readable name for the wallet.
-            password: Password to encrypt the keystore.
 
         Returns:
-            The created Wallet object (unlocked).
-
-        Raises:
-            ValueError: If password is too short.
+            The created Wallet object.
         """
-        if len(password) < 8:
-            raise ValueError("Password must be at least 8 characters")
-
         # Generate new account
         account: LocalAccount = Account.create()
-
-        # Create keystore (encrypted)
-        keystore = account.encrypt(password)
-
-        # Add metadata
-        keystore["name"] = name
-
-        # Save to file
-        keystore_path = self._wallet_dir / f"{account.address.lower()}.json"
-        with open(keystore_path, "w") as f:
-            json.dump(keystore, f, indent=2)
-
-        logger.info("Created new wallet: {} ({})", name, account.address)
 
         # Ensure private key has 0x prefix
         private_key_hex = account.key.hex()
         if not private_key_hex.startswith("0x"):
             private_key_hex = f"0x{private_key_hex}"
+
+        # Create wallet data
+        wallet_data = {
+            "name": name,
+            "address": account.address,
+            "private_key": private_key_hex,
+        }
+
+        # Save to file
+        wallet_path = self._wallet_dir / f"{account.address.lower()}.json"
+        with open(wallet_path, "w") as f:
+            json.dump(wallet_data, f, indent=2)
+
+        logger.info("Created new wallet: {} ({})", name, account.address)
 
         wallet = Wallet(
             name=name,
@@ -131,20 +125,20 @@ class WalletManager:
             List of dicts with 'address' and 'name' keys.
         """
         wallets = []
-        for keystore_file in self._wallet_dir.glob("0x*.json"):
+        for wallet_file in self._wallet_dir.glob("0x*.json"):
             try:
-                with open(keystore_file) as f:
-                    keystore = json.load(f)
-                    # Ensure address has 0x prefix
-                    addr = keystore.get("address", "").lower()
+                with open(wallet_file) as f:
+                    data = json.load(f)
+                    # Handle both new format and legacy keystore format
+                    addr = data.get("address", "").lower()
                     if not addr.startswith("0x"):
                         addr = f"0x{addr}"
                     wallets.append({
                         "address": addr,
-                        "name": keystore.get("name", "unnamed"),
+                        "name": data.get("name", "unnamed"),
                     })
             except (json.JSONDecodeError, IOError) as e:
-                logger.warning("Failed to read keystore {}: {}", keystore_file, e)
+                logger.warning("Failed to read wallet {}: {}", wallet_file, e)
 
         return wallets
 
@@ -152,47 +146,51 @@ class WalletManager:
         """Check if any wallets exist."""
         return len(self.list_wallets()) > 0
 
-    def load_wallet(self, address: str, password: str) -> Wallet:
-        """Load and unlock a wallet by address.
+    def load_wallet(self, address: str) -> Wallet:
+        """Load a wallet by address.
 
         Args:
             address: Wallet address (with or without 0x prefix).
-            password: Password to decrypt the keystore.
 
         Returns:
-            The unlocked Wallet object.
+            The Wallet object.
 
         Raises:
             FileNotFoundError: If wallet doesn't exist.
-            ValueError: If password is incorrect.
         """
         # Normalize address
         if not address.startswith("0x"):
             address = f"0x{address}"
         address = address.lower()
 
-        keystore_path = self._wallet_dir / f"{address}.json"
-        if not keystore_path.exists():
+        wallet_path = self._wallet_dir / f"{address}.json"
+        if not wallet_path.exists():
             raise FileNotFoundError(f"Wallet not found: {address}")
 
-        with open(keystore_path) as f:
-            keystore: dict[str, Any] = json.load(f)
+        with open(wallet_path) as f:
+            data: dict[str, Any] = json.load(f)
 
-        try:
-            private_key_bytes = Account.decrypt(keystore, password)
-        except ValueError as e:
-            raise ValueError(f"Invalid password: {e}") from e
+        # Handle both new format and legacy keystore format
+        if "private_key" in data:
+            # New simple format
+            private_key_hex = data["private_key"]
+            name = data.get("name", "unnamed")
+            wallet_address = data.get("address", address)
+        elif "crypto" in data or "Crypto" in data:
+            # Legacy encrypted keystore - cannot load without password
+            raise ValueError(
+                "Legacy encrypted wallet found. Please re-import using private key."
+            )
+        else:
+            raise ValueError("Invalid wallet file format")
 
-        name = keystore.get("name", "unnamed")
-
-        # Ensure private key has 0x prefix
-        private_key_hex = private_key_bytes.hex()
-        if not private_key_hex.startswith("0x"):
-            private_key_hex = f"0x{private_key_hex}"
+        # Ensure address has 0x prefix
+        if not wallet_address.startswith("0x"):
+            wallet_address = f"0x{wallet_address}"
 
         wallet = Wallet(
             name=name,
-            address=f"0x{keystore['address']}",
+            address=wallet_address,
             private_key=private_key_hex,
         )
 
@@ -204,7 +202,7 @@ class WalletManager:
         return wallet
 
     def delete_wallet(self, address: str) -> bool:
-        """Delete a wallet keystore file.
+        """Delete a wallet file.
 
         Args:
             address: Wallet address to delete.
@@ -216,9 +214,9 @@ class WalletManager:
             address = f"0x{address}"
         address = address.lower()
 
-        keystore_path = self._wallet_dir / f"{address}.json"
-        if keystore_path.exists():
-            keystore_path.unlink()
+        wallet_path = self._wallet_dir / f"{address}.json"
+        if wallet_path.exists():
+            wallet_path.unlink()
             logger.info("Deleted wallet: {}", address)
 
             # Clear active if this was it
@@ -229,17 +227,16 @@ class WalletManager:
 
         return False
 
-    def export_private_key(self, address: str, password: str) -> str:
+    def export_private_key(self, address: str) -> str:
         """Export private key for a wallet (for MetaMask import).
 
         Args:
             address: Wallet address.
-            password: Password to decrypt.
 
         Returns:
             Private key as hex string with 0x prefix.
         """
-        wallet = self.load_wallet(address, password)
+        wallet = self.load_wallet(address)
         return wallet.private_key
 
     def get_active_private_key(self) -> str | None:
@@ -270,30 +267,25 @@ class WalletManager:
         if not address.startswith("0x"):
             address = f"0x{address}"
 
-        keystore_path = self._wallet_dir / f"{address}.json"
-        return keystore_path.exists()
+        wallet_path = self._wallet_dir / f"{address}.json"
+        return wallet_path.exists()
 
     def import_from_private_key(
-        self, private_key: str, password: str, name: str | None = None
+        self, private_key: str, name: str | None = None
     ) -> Wallet:
         """Import wallet from a raw private key.
 
         Args:
             private_key: Hex private key (with or without 0x prefix).
-            password: Password to encrypt the new keystore.
             name: Optional name for the wallet.
 
         Returns:
-            The imported Wallet object (unlocked).
+            The imported Wallet object.
 
         Raises:
             ValueError: If private key is invalid.
-            ValueError: If password is too short.
             ValueError: If wallet with same address already exists.
         """
-        if len(password) < 8:
-            raise ValueError("Password must be at least 8 characters")
-
         # Normalize key - add 0x if missing
         if not private_key.startswith("0x"):
             private_key = f"0x{private_key}"
@@ -322,14 +314,17 @@ class WalletManager:
             import time
             name = f"imported_{int(time.time())}"
 
-        # Create keystore (encrypted)
-        keystore = account.encrypt(password)
-        keystore["name"] = name
+        # Create wallet data
+        wallet_data = {
+            "name": name,
+            "address": account.address,
+            "private_key": private_key,
+        }
 
         # Save to file
-        keystore_path = self._wallet_dir / f"{account.address.lower()}.json"
-        with open(keystore_path, "w") as f:
-            json.dump(keystore, f, indent=2)
+        wallet_path = self._wallet_dir / f"{account.address.lower()}.json"
+        with open(wallet_path, "w") as f:
+            json.dump(wallet_data, f, indent=2)
 
         logger.info("Imported wallet from private key: {} ({})", name, account.address)
 
@@ -347,13 +342,16 @@ class WalletManager:
     ) -> Wallet:
         """Import wallet from an existing keystore JSON file (MetaMask export).
 
+        Note: Password is still required because MetaMask keystores are encrypted.
+        After import, the wallet is stored in our simple unencrypted format.
+
         Args:
             keystore_path: Path to the JSON keystore file.
             password: Password to decrypt the keystore.
             name: Optional name for the wallet (defaults to original or filename).
 
         Returns:
-            The imported Wallet object (unlocked).
+            The imported Wallet object.
 
         Raises:
             FileNotFoundError: If keystore file doesn't exist.
@@ -377,7 +375,7 @@ class WalletManager:
         if "address" not in keystore:
             raise ValueError("Invalid keystore: missing 'address' field")
 
-        # Decrypt to verify password
+        # Decrypt to get private key
         try:
             private_key_bytes = Account.decrypt(keystore, password)
         except ValueError as e:
@@ -396,16 +394,21 @@ class WalletManager:
         if name is None:
             name = keystore.get("name") or keystore_path.stem
 
-        # Re-encrypt with same password (to add our metadata format)
+        # Convert to hex
         private_key_hex = f"0x{private_key_bytes.hex()}"
         account = Account.from_key(private_key_hex)
-        new_keystore = account.encrypt(password)
-        new_keystore["name"] = name
+
+        # Create wallet data (simple format, not encrypted)
+        wallet_data = {
+            "name": name,
+            "address": account.address,
+            "private_key": private_key_hex,
+        }
 
         # Save to our wallet directory
         dest_path = self._wallet_dir / f"{address}.json"
         with open(dest_path, "w") as f:
-            json.dump(new_keystore, f, indent=2)
+            json.dump(wallet_data, f, indent=2)
 
         logger.info("Imported wallet from keystore: {} ({})", name, address)
 

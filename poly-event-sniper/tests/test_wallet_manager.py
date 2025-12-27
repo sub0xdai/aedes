@@ -5,6 +5,8 @@ import pytest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from eth_account import Account
+
 from src.wallet import Wallet, WalletManager
 
 
@@ -39,7 +41,7 @@ class TestWalletManager:
         """Test wallet creation generates valid address."""
         with TemporaryDirectory() as tmpdir:
             manager = WalletManager(Path(tmpdir))
-            wallet = manager.create_wallet("test_wallet", "password123")
+            wallet = manager.create_wallet("test_wallet")
 
             assert wallet.name == "test_wallet"
             assert wallet.address.startswith("0x")
@@ -47,37 +49,30 @@ class TestWalletManager:
             assert wallet.private_key.startswith("0x")
             assert len(wallet.private_key) == 66  # 0x + 64 hex chars
 
-    def test_create_wallet_saves_keystore(self) -> None:
-        """Test wallet creation saves encrypted keystore file."""
+    def test_create_wallet_saves_file(self) -> None:
+        """Test wallet creation saves JSON file."""
         with TemporaryDirectory() as tmpdir:
             manager = WalletManager(Path(tmpdir))
-            wallet = manager.create_wallet("test_wallet", "password123")
+            wallet = manager.create_wallet("test_wallet")
 
-            keystore_path = Path(tmpdir) / f"{wallet.address.lower()}.json"
-            assert keystore_path.exists()
+            wallet_path = Path(tmpdir) / f"{wallet.address.lower()}.json"
+            assert wallet_path.exists()
 
-            with open(keystore_path) as f:
-                keystore = json.load(f)
+            with open(wallet_path) as f:
+                data = json.load(f)
 
-            assert keystore["name"] == "test_wallet"
-            assert "crypto" in keystore  # Encrypted data
-            assert "address" in keystore
+            assert data["name"] == "test_wallet"
+            assert data["address"] == wallet.address
+            assert data["private_key"] == wallet.private_key
 
     def test_create_wallet_sets_active(self) -> None:
         """Test wallet creation sets it as active."""
         with TemporaryDirectory() as tmpdir:
             manager = WalletManager(Path(tmpdir))
-            wallet = manager.create_wallet("test_wallet", "password123")
+            wallet = manager.create_wallet("test_wallet")
 
             assert manager.active_wallet is not None
             assert manager.active_wallet.address == wallet.address
-
-    def test_password_too_short(self) -> None:
-        """Test password validation."""
-        with TemporaryDirectory() as tmpdir:
-            manager = WalletManager(Path(tmpdir))
-            with pytest.raises(ValueError, match="at least 8 characters"):
-                manager.create_wallet("test", "short")
 
     def test_list_wallets(self) -> None:
         """Test listing wallets."""
@@ -89,8 +84,8 @@ class TestWalletManager:
             assert not manager.has_wallets()
 
             # Create wallets
-            wallet1 = manager.create_wallet("wallet1", "password123")
-            wallet2 = manager.create_wallet("wallet2", "password456")
+            wallet1 = manager.create_wallet("wallet1")
+            wallet2 = manager.create_wallet("wallet2")
 
             wallets = manager.list_wallets()
             assert len(wallets) == 2
@@ -101,29 +96,20 @@ class TestWalletManager:
             assert wallet2.address.lower() in addresses
 
     def test_load_wallet(self) -> None:
-        """Test loading and unlocking a wallet."""
+        """Test loading a wallet."""
         with TemporaryDirectory() as tmpdir:
             manager = WalletManager(Path(tmpdir))
-            original = manager.create_wallet("test_wallet", "password123")
+            original = manager.create_wallet("test_wallet")
 
             # Clear active wallet
             manager._active_wallet = None
 
             # Load it back
-            loaded = manager.load_wallet(original.address, "password123")
+            loaded = manager.load_wallet(original.address)
 
             assert loaded.name == original.name
             assert loaded.address == original.address
             assert loaded.private_key == original.private_key
-
-    def test_load_wallet_wrong_password(self) -> None:
-        """Test loading with wrong password fails."""
-        with TemporaryDirectory() as tmpdir:
-            manager = WalletManager(Path(tmpdir))
-            wallet = manager.create_wallet("test_wallet", "password123")
-
-            with pytest.raises(ValueError, match="Invalid password"):
-                manager.load_wallet(wallet.address, "wrong_password")
 
     def test_load_wallet_not_found(self) -> None:
         """Test loading non-existent wallet."""
@@ -131,13 +117,30 @@ class TestWalletManager:
             manager = WalletManager(Path(tmpdir))
 
             with pytest.raises(FileNotFoundError, match="not found"):
-                manager.load_wallet("0x0000000000000000000000000000000000000000", "password")
+                manager.load_wallet("0x0000000000000000000000000000000000000000")
+
+    def test_load_wallet_legacy_encrypted(self) -> None:
+        """Test loading legacy encrypted keystore fails with helpful message."""
+        with TemporaryDirectory() as tmpdir:
+            manager = WalletManager(Path(tmpdir))
+
+            # Create a legacy encrypted keystore manually
+            account = Account.create()
+            keystore = account.encrypt("password123")
+            keystore["name"] = "legacy"
+
+            keystore_path = Path(tmpdir) / f"{account.address.lower()}.json"
+            with open(keystore_path, "w") as f:
+                json.dump(keystore, f)
+
+            with pytest.raises(ValueError, match="Legacy encrypted wallet"):
+                manager.load_wallet(account.address)
 
     def test_delete_wallet(self) -> None:
         """Test deleting a wallet."""
         with TemporaryDirectory() as tmpdir:
             manager = WalletManager(Path(tmpdir))
-            wallet = manager.create_wallet("test_wallet", "password123")
+            wallet = manager.create_wallet("test_wallet")
 
             assert manager.has_wallets()
 
@@ -158,9 +161,9 @@ class TestWalletManager:
         """Test exporting private key."""
         with TemporaryDirectory() as tmpdir:
             manager = WalletManager(Path(tmpdir))
-            wallet = manager.create_wallet("test_wallet", "password123")
+            wallet = manager.create_wallet("test_wallet")
 
-            exported = manager.export_private_key(wallet.address, "password123")
+            exported = manager.export_private_key(wallet.address)
             assert exported == wallet.private_key
 
     def test_get_active_private_key(self) -> None:
@@ -172,35 +175,35 @@ class TestWalletManager:
             assert manager.get_active_private_key() is None
 
             # Create wallet (becomes active)
-            wallet = manager.create_wallet("test_wallet", "password123")
+            wallet = manager.create_wallet("test_wallet")
             assert manager.get_active_private_key() == wallet.private_key
 
     def test_address_normalization(self) -> None:
         """Test address normalization (with/without 0x, case)."""
         with TemporaryDirectory() as tmpdir:
             manager = WalletManager(Path(tmpdir))
-            wallet = manager.create_wallet("test_wallet", "password123")
+            wallet = manager.create_wallet("test_wallet")
 
             # Load with lowercase
-            loaded1 = manager.load_wallet(wallet.address.lower(), "password123")
+            loaded1 = manager.load_wallet(wallet.address.lower())
             assert loaded1.address.lower() == wallet.address.lower()
 
             # Load without 0x prefix
-            loaded2 = manager.load_wallet(wallet.address[2:], "password123")
+            loaded2 = manager.load_wallet(wallet.address[2:])
             assert loaded2.address.lower() == wallet.address.lower()
 
     def test_multiple_managers_same_dir(self) -> None:
         """Test multiple managers can access same wallet directory."""
         with TemporaryDirectory() as tmpdir:
             manager1 = WalletManager(Path(tmpdir))
-            wallet = manager1.create_wallet("shared_wallet", "password123")
+            wallet = manager1.create_wallet("shared_wallet")
 
             # New manager instance
             manager2 = WalletManager(Path(tmpdir))
             assert manager2.has_wallets()
 
             # Load wallet from second manager
-            loaded = manager2.load_wallet(wallet.address, "password123")
+            loaded = manager2.load_wallet(wallet.address)
             assert loaded.private_key == wallet.private_key
 
 
@@ -211,7 +214,7 @@ class TestWalletExists:
         """Test wallet_exists returns True for existing wallet."""
         with TemporaryDirectory() as tmpdir:
             manager = WalletManager(Path(tmpdir))
-            wallet = manager.create_wallet("test", "password123")
+            wallet = manager.create_wallet("test")
 
             assert manager.wallet_exists(wallet.address) is True
 
@@ -226,7 +229,7 @@ class TestWalletExists:
         """Test wallet_exists handles address normalization."""
         with TemporaryDirectory() as tmpdir:
             manager = WalletManager(Path(tmpdir))
-            wallet = manager.create_wallet("test", "password123")
+            wallet = manager.create_wallet("test")
 
             # Without 0x prefix
             assert manager.wallet_exists(wallet.address[2:]) is True
@@ -244,7 +247,7 @@ class TestImportFromPrivateKey:
         """Test importing wallet from private key."""
         with TemporaryDirectory() as tmpdir:
             manager = WalletManager(Path(tmpdir))
-            wallet = manager.import_from_private_key(self.TEST_KEY, "password123")
+            wallet = manager.import_from_private_key(self.TEST_KEY)
 
             assert wallet.private_key == self.TEST_KEY
             assert wallet.address.startswith("0x")
@@ -255,7 +258,7 @@ class TestImportFromPrivateKey:
         """Test importing handles keys without 0x prefix."""
         with TemporaryDirectory() as tmpdir:
             manager = WalletManager(Path(tmpdir))
-            wallet = manager.import_from_private_key(self.TEST_KEY[2:], "password123")
+            wallet = manager.import_from_private_key(self.TEST_KEY[2:])
 
             # Should still normalize to 0x prefix
             assert wallet.private_key == self.TEST_KEY
@@ -264,9 +267,7 @@ class TestImportFromPrivateKey:
         """Test importing with custom name."""
         with TemporaryDirectory() as tmpdir:
             manager = WalletManager(Path(tmpdir))
-            wallet = manager.import_from_private_key(
-                self.TEST_KEY, "password123", name="my_wallet"
-            )
+            wallet = manager.import_from_private_key(self.TEST_KEY, name="my_wallet")
 
             assert wallet.name == "my_wallet"
 
@@ -276,7 +277,7 @@ class TestImportFromPrivateKey:
             manager = WalletManager(Path(tmpdir))
 
             with pytest.raises(ValueError, match="64 hex characters"):
-                manager.import_from_private_key("0x1234", "password123")
+                manager.import_from_private_key("0x1234")
 
     def test_import_from_private_key_invalid_hex(self) -> None:
         """Test importing non-hex key raises ValueError."""
@@ -284,55 +285,58 @@ class TestImportFromPrivateKey:
             manager = WalletManager(Path(tmpdir))
 
             with pytest.raises(ValueError, match="hexadecimal"):
-                manager.import_from_private_key("0x" + "g" * 64, "password123")
+                manager.import_from_private_key("0x" + "g" * 64)
 
     def test_import_from_private_key_duplicate(self) -> None:
         """Test importing duplicate address raises ValueError."""
         with TemporaryDirectory() as tmpdir:
             manager = WalletManager(Path(tmpdir))
-            manager.import_from_private_key(self.TEST_KEY, "password123")
+            manager.import_from_private_key(self.TEST_KEY)
 
             with pytest.raises(ValueError, match="already exists"):
-                manager.import_from_private_key(self.TEST_KEY, "password456")
-
-    def test_import_from_private_key_short_password(self) -> None:
-        """Test importing with short password raises ValueError."""
-        with TemporaryDirectory() as tmpdir:
-            manager = WalletManager(Path(tmpdir))
-
-            with pytest.raises(ValueError, match="8 characters"):
-                manager.import_from_private_key(self.TEST_KEY, "short")
+                manager.import_from_private_key(self.TEST_KEY)
 
 
 class TestImportFromKeystore:
     """Tests for import_from_keystore method."""
 
+    def _create_encrypted_keystore(self, tmpdir: str, password: str = "password123") -> tuple[Path, str, str]:
+        """Helper to create an encrypted keystore for testing."""
+        account = Account.create()
+        keystore = account.encrypt(password)
+        keystore["name"] = "original"
+
+        keystore_path = Path(tmpdir) / f"{account.address.lower()}.json"
+        with open(keystore_path, "w") as f:
+            json.dump(keystore, f)
+
+        private_key = f"0x{account.key.hex()}"
+        return keystore_path, account.address, private_key
+
     def test_import_from_keystore(self) -> None:
         """Test importing wallet from keystore file."""
         with TemporaryDirectory() as tmpdir:
-            # Create a keystore first
-            manager1 = WalletManager(Path(tmpdir) / "source")
-            original = manager1.create_wallet("original", "password123")
-            keystore_path = Path(tmpdir) / "source" / f"{original.address.lower()}.json"
+            # Create an encrypted keystore
+            source_dir = Path(tmpdir) / "source"
+            source_dir.mkdir()
+            keystore_path, address, private_key = self._create_encrypted_keystore(str(source_dir))
 
             # Import into different directory
-            manager2 = WalletManager(Path(tmpdir) / "dest")
-            imported = manager2.import_from_keystore(keystore_path, "password123")
+            manager = WalletManager(Path(tmpdir) / "dest")
+            imported = manager.import_from_keystore(keystore_path, "password123")
 
-            assert imported.address == original.address
-            assert imported.private_key == original.private_key
+            assert imported.address == address
+            assert imported.private_key == private_key
 
     def test_import_from_keystore_custom_name(self) -> None:
         """Test importing keystore with custom name."""
         with TemporaryDirectory() as tmpdir:
-            manager1 = WalletManager(Path(tmpdir) / "source")
-            original = manager1.create_wallet("original", "password123")
-            keystore_path = Path(tmpdir) / "source" / f"{original.address.lower()}.json"
+            source_dir = Path(tmpdir) / "source"
+            source_dir.mkdir()
+            keystore_path, _, _ = self._create_encrypted_keystore(str(source_dir))
 
-            manager2 = WalletManager(Path(tmpdir) / "dest")
-            imported = manager2.import_from_keystore(
-                keystore_path, "password123", name="renamed"
-            )
+            manager = WalletManager(Path(tmpdir) / "dest")
+            imported = manager.import_from_keystore(keystore_path, "password123", name="renamed")
 
             assert imported.name == "renamed"
 
@@ -347,26 +351,26 @@ class TestImportFromKeystore:
     def test_import_from_keystore_wrong_password(self) -> None:
         """Test importing with wrong password raises ValueError."""
         with TemporaryDirectory() as tmpdir:
-            manager1 = WalletManager(Path(tmpdir) / "source")
-            original = manager1.create_wallet("original", "password123")
-            keystore_path = Path(tmpdir) / "source" / f"{original.address.lower()}.json"
+            source_dir = Path(tmpdir) / "source"
+            source_dir.mkdir()
+            keystore_path, _, _ = self._create_encrypted_keystore(str(source_dir))
 
-            manager2 = WalletManager(Path(tmpdir) / "dest")
+            manager = WalletManager(Path(tmpdir) / "dest")
             with pytest.raises(ValueError, match="Wrong password"):
-                manager2.import_from_keystore(keystore_path, "wrong_password")
+                manager.import_from_keystore(keystore_path, "wrong_password")
 
     def test_import_from_keystore_duplicate(self) -> None:
         """Test importing duplicate address raises ValueError."""
         with TemporaryDirectory() as tmpdir:
-            manager1 = WalletManager(Path(tmpdir) / "source")
-            original = manager1.create_wallet("original", "password123")
-            keystore_path = Path(tmpdir) / "source" / f"{original.address.lower()}.json"
+            source_dir = Path(tmpdir) / "source"
+            source_dir.mkdir()
+            keystore_path, _, _ = self._create_encrypted_keystore(str(source_dir))
 
-            manager2 = WalletManager(Path(tmpdir) / "dest")
-            manager2.import_from_keystore(keystore_path, "password123")
+            manager = WalletManager(Path(tmpdir) / "dest")
+            manager.import_from_keystore(keystore_path, "password123")
 
             with pytest.raises(ValueError, match="already exists"):
-                manager2.import_from_keystore(keystore_path, "password123")
+                manager.import_from_keystore(keystore_path, "password123")
 
     def test_import_from_keystore_invalid_json(self) -> None:
         """Test importing invalid JSON raises ValueError."""
@@ -402,7 +406,7 @@ class TestGenerateQRCode:
         """Test QR code generation returns string."""
         with TemporaryDirectory() as tmpdir:
             manager = WalletManager(Path(tmpdir))
-            wallet = manager.create_wallet("test", "password123")
+            wallet = manager.create_wallet("test")
 
             qr = manager.generate_qr_code(wallet.address)
 
@@ -415,7 +419,7 @@ class TestGenerateQRCode:
         """Test QR code uses active wallet when no address provided."""
         with TemporaryDirectory() as tmpdir:
             manager = WalletManager(Path(tmpdir))
-            wallet = manager.create_wallet("test", "password123")
+            manager.create_wallet("test")
 
             # Should use active wallet
             qr = manager.generate_qr_code()

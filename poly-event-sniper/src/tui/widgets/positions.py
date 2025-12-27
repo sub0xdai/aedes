@@ -27,18 +27,24 @@ class PositionsPanel(Static):
     DEFAULT_CSS = """
     PositionsPanel {
         height: 100%;
+        width: 100%;
     }
 
     PositionsPanel DataTable {
         height: 100%;
+        width: 100%;
+    }
+
+    PositionsPanel DataTable > .datatable--header {
+        background: #313244;
     }
 
     .pnl-positive {
-        color: $success;
+        color: #a6e3a1;
     }
 
     .pnl-negative {
-        color: $error;
+        color: #f38ba8;
     }
     """
 
@@ -61,8 +67,9 @@ class PositionsPanel(Static):
 
     def compose(self) -> ComposeResult:
         """Compose the table."""
-        table: DataTable[str] = DataTable(id="positions-table")
-        table.add_columns("Token", "Side", "Qty", "Entry", "Current", "PnL")
+        table: DataTable[str] = DataTable(id="positions-table", zebra_stripes=True)
+        # Simplified columns to fit narrow sidebar
+        table.add_columns("Token", "Entry", "Now", "PnL")
         yield table
 
     def add_position(self, position: "Position") -> None:
@@ -99,24 +106,18 @@ class PositionsPanel(Static):
         table.clear()
 
         for position in self._positions.values():
-            # Truncate token ID
-            token_short = position.token_id[:8] + "..."
+            # Truncate token ID (shorter for narrow sidebar)
+            token_short = position.token_id[:6]
 
-            # Format side
-            side = position.side.value
+            # Format prices compactly
+            entry = f"{position.avg_entry_price:.2f}"
+            current = f"{position.current_price:.2f}"
 
-            # Format quantity
-            qty = f"{position.quantity:.2f}"
-
-            # Format prices
-            entry = f"{position.avg_entry_price:.3f}"
-            current = f"{position.current_price:.3f}"
-
-            # Format PnL with color indicator
+            # Format PnL with sign
             pnl = position.unrealized_pnl
-            pnl_str = f"${pnl:+.2f}"
+            pnl_str = f"{pnl:+.2f}"
 
-            table.add_row(token_short, side, qty, entry, current, pnl_str)
+            table.add_row(token_short, entry, current, pnl_str)
 
     def clear(self) -> None:
         """Clear all positions from the table."""

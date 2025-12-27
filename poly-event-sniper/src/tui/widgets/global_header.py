@@ -1,7 +1,7 @@
 """Global header bar for Aedes TUI.
 
 Full-width header containing:
-- Left: App title + status + mode
+- Left: App title + trading status + mode
 - Right: Wallet address + balance
 """
 
@@ -16,8 +16,13 @@ class GlobalHeader(Static):
 
     Layout:
     ┌──────────────────────────────────────────────────────────────────────┐
-    │ AEDES  ● Connected  DRY RUN          │  Wallet: 0x1234...5678 $0.00  │
+    │ AEDES  ■ IDLE  DRY RUN               │  Wallet: 0x1234...5678 $0.00  │
     └──────────────────────────────────────────────────────────────────────┘
+
+    Trading states:
+    - IDLE (yellow): Wallet ready, not trading (press 's' to start)
+    - RUNNING (green): Actively monitoring and trading
+    - STOPPED (red): Stopped or errored
     """
 
     DEFAULT_CSS = """
@@ -63,6 +68,7 @@ class GlobalHeader(Static):
 
     GlobalHeader #status-text {
         margin-right: 2;
+        text-style: bold;
     }
 
     GlobalHeader #mode-badge {
@@ -70,11 +76,15 @@ class GlobalHeader(Static):
         padding: 0 1;
     }
 
-    GlobalHeader .status-connected {
+    GlobalHeader .status-idle {
+        color: #f9e2af;
+    }
+
+    GlobalHeader .status-running {
         color: #a6e3a1;
     }
 
-    GlobalHeader .status-disconnected {
+    GlobalHeader .status-stopped {
         color: #f38ba8;
     }
 
@@ -113,7 +123,7 @@ class GlobalHeader(Static):
     """
 
     # Reactive properties
-    is_connected: reactive[bool] = reactive(False)
+    trading_status: reactive[str] = reactive("idle")  # idle, running, stopped
     wallet_address: reactive[str] = reactive("")
     wallet_balance: reactive[float] = reactive(0.0)
     is_dry_run: reactive[bool] = reactive(True)
@@ -124,8 +134,8 @@ class GlobalHeader(Static):
             with Static(classes="header-left"):
                 with Horizontal():
                     yield Label("AEDES", id="app-title")
-                    yield Label("○", id="status-indicator", classes="status-disconnected")
-                    yield Label("Disconnected", id="status-text", classes="status-disconnected")
+                    yield Label("■", id="status-indicator", classes="status-idle")
+                    yield Label("IDLE", id="status-text", classes="status-idle")
                     yield Label("DRY RUN", id="mode-badge", classes="mode-dry-run")
 
             # Right side: Wallet info
@@ -136,20 +146,26 @@ class GlobalHeader(Static):
                     yield Label("Not connected", id="wallet-address", classes="no-wallet")
                     yield Label("", id="wallet-balance")
 
-    def watch_is_connected(self, connected: bool) -> None:
-        """Update connection indicator."""
+    def watch_trading_status(self, status: str) -> None:
+        """Update trading status indicator."""
         indicator = self.query_one("#status-indicator", Label)
         text = self.query_one("#status-text", Label)
-        if connected:
-            indicator.update("●")
-            indicator.set_classes("status-connected")
-            text.update("Connected")
-            text.set_classes("status-connected")
-        else:
-            indicator.update("○")
-            indicator.set_classes("status-disconnected")
-            text.update("Disconnected")
-            text.set_classes("status-disconnected")
+
+        if status == "running":
+            indicator.update("▶")
+            indicator.set_classes("status-running")
+            text.update("RUNNING")
+            text.set_classes("status-running")
+        elif status == "stopped":
+            indicator.update("■")
+            indicator.set_classes("status-stopped")
+            text.update("STOPPED")
+            text.set_classes("status-stopped")
+        else:  # idle
+            indicator.update("■")
+            indicator.set_classes("status-idle")
+            text.update("IDLE")
+            text.set_classes("status-idle")
 
     def watch_wallet_address(self, address: str) -> None:
         """Update wallet display when address changes."""
@@ -196,9 +212,14 @@ class GlobalHeader(Static):
         self.wallet_address = ""
         self.wallet_balance = 0.0
 
+    def set_trading_status(self, status: str) -> None:
+        """Set trading status: 'idle', 'running', or 'stopped'."""
+        self.trading_status = status
+
+    # Backward compat alias
     def set_connected(self, connected: bool) -> None:
-        """Set connection status."""
-        self.is_connected = connected
+        """Set connection status (deprecated, use set_trading_status)."""
+        self.trading_status = "running" if connected else "idle"
 
     def set_dry_run(self, dry_run: bool) -> None:
         """Set run mode."""

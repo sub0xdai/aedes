@@ -11,6 +11,12 @@ wheels/
 
 # Environment variables (secrets)
 .env
+.env.local
+.env.*.local
+
+# Wallet storage (contains private keys!)
+wallets/
+*.keystore
 
 # Logs
 logs/
@@ -31,3 +37,6 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
+
+# Planning files (temporary)
+plan-*.xml

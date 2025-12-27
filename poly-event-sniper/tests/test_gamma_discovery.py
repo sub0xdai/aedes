@@ -57,7 +57,8 @@ class TestMarketCriteriaModel:
         """Test query params with default criteria."""
         criteria = MarketCriteria()
         params = criteria.to_query_params()
-        assert params == {"active": "true"}
+        # active_only=True sends both active=true and closed=false
+        assert params == {"active": "true", "closed": "false"}
 
     def test_to_query_params_with_tags(self) -> None:
         """Test query params with tags."""
@@ -543,6 +544,36 @@ class TestGammaClientDiscover:
                 results = await client.discover(MarketCriteria())
 
         assert len(results) == 0
+
+    @pytest.mark.asyncio
+    async def test_discover_raw_list_format(self) -> None:
+        """Test discover handles real Gamma API format (raw list, not wrapped)."""
+        # Real Gamma API returns raw list, not {"data": [...]}
+        mock_response = MockResponse(
+            status=200,
+            json_data=[
+                {
+                    "title": "Real API Event",
+                    "markets": [
+                        {
+                            "id": "market_real",
+                            "clobTokenIds": ["token_real"],
+                            "volume": "5000",
+                            "liquidity": "1000",
+                        }
+                    ],
+                    "tags": [{"slug": "crypto"}],
+                }
+            ],
+        )
+
+        async with GammaClient() as client:
+            with patch.object(client._session, "get", return_value=mock_response):
+                results = await client.discover(MarketCriteria())
+
+        assert len(results) == 1
+        assert results[0].market_id == "market_real"
+        assert results[0].title == "Real API Event"
 
 
 # =============================================================================

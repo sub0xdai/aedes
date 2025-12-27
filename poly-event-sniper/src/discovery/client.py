@@ -364,14 +364,23 @@ class GammaClient:
                 logger.error("Gamma API error: {}", str(e))
                 raise
 
-            events = data.get("data", [])
+            # Handle both API response formats:
+            # - Real API returns raw list: [...]
+            # - Some responses may be wrapped: {"data": [...]}
+            if isinstance(data, list):
+                events = data
+                next_cursor = None  # Raw list format has no pagination
+            else:
+                events = data.get("data", [])
 
             for event in events:
                 for result in self._parse_event(event):
                     if self._filter_result(result, criteria):
                         yield result
 
-            # Check for more pages
+            # Check for more pages (only wrapped format supports pagination)
+            if isinstance(data, list):
+                break  # Raw list format has no pagination
             next_cursor = data.get("next_cursor")
             if not next_cursor:
                 break

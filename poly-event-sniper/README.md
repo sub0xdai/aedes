@@ -1,244 +1,131 @@
-# Poly Event Sniper
+# Aedes - Polymarket Event Sniper
 
-A modular, low-latency event sniping bot for Polymarket prediction markets.
+A modular, low-latency trading bot for Polymarket prediction markets.
 
 ## Overview
 
-Poly Event Sniper monitors Polymarket markets via WebSocket and automatically executes trades when price/probability thresholds are crossed. Built with a clean, extensible architecture following SOLID principles.
+Aedes monitors Polymarket markets via WebSocket and RSS feeds, automatically executing trades when price thresholds are crossed or keywords detected. Built with a clean, extensible architecture.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                         ORCHESTRATOR                             │
 │                                                                  │
 │   ┌─────────────┐     ┌─────────────┐     ┌─────────────────┐   │
-│   │  INGESTER   │ ──► │   PARSER    │ ──► │    EXECUTOR     │   │
-│   │ (WebSocket) │     │ (Threshold) │     │  (Polymarket)   │   │
+│   │  INGESTERS  │ ──► │   PARSERS   │ ──► │    EXECUTOR     │   │
+│   │ WS / RSS    │     │ Price/News  │     │  (Polymarket)   │   │
 │   └─────────────┘     └─────────────┘     └─────────────────┘   │
-│         │                   │                     │              │
-│         ▼                   ▼                     ▼              │
-│    MarketEvent         TradeSignal         ExecutionResult       │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
 ## Features
 
 - **Real-time WebSocket ingestion** from Polymarket CLOB
-- **Threshold-based signal generation** with cooldown periods
+- **RSS feed monitoring** for news-driven trading
+- **In-app wallet management** - no private key export needed
+- **Threshold & keyword signals** with cooldown periods
 - **Dry-run mode** for safe testing (enabled by default)
-- **Rate limiting** to prevent API bans (100ms between requests)
-- **Position size limits** for risk management
-- **Price validation** with spread checks for illiquid markets
-- **Auto-reconnect** with exponential backoff
-- **Graceful shutdown** handling (SIGINT/SIGTERM)
-- **Comprehensive logging** with loguru
+- **Terminal UI** with live monitoring
+- **Auto-discovery** of markets via Gamma API
+- **Portfolio tracking** with risk controls
 - **Type-safe** with MyPy strict mode
-
-## Tech Stack
-
-| Component | Technology |
-|-----------|------------|
-| Language | Python 3.12+ |
-| Package Manager | [uv](https://github.com/astral-sh/uv) |
-| Configuration | pydantic-settings |
-| HTTP/WebSocket | aiohttp |
-| Polymarket Client | py-clob-client |
-| Logging | loguru |
-| Type Checking | MyPy (strict) |
-| Testing | pytest + pytest-asyncio |
-| Formatting | black, isort |
-| User Interface | Textual |
-
-## Project Structure
-
-```
-poly-event-sniper/
-├── src/
-│   ├── config.py              # Pydantic settings configuration
-│   ├── exceptions.py          # Custom exception hierarchy
-│   ├── models.py              # Domain models (immutable)
-│   ├── orchestrator.py        # Pipeline orchestration
-│   ├── interfaces/
-│   │   ├── executor.py        # BaseExecutor ABC
-│   │   ├── ingester.py        # BaseIngester ABC
-│   │   └── parser.py          # BaseParser ABC
-│   ├── executors/
-│   │   └── polymarket.py      # Polymarket CLOB executor
-│   ├── ingesters/
-│   │   └── polymarket.py      # WebSocket market data ingester
-    └── parsers/
-        └── threshold.py       # Price threshold parser
-    ├── tui/
-    │   └── app.py             # Textual TUI application
-├── tests/
-│   ├── test_execution.py      # Executor tests (33)
-│   ├── test_ingestion.py      # Ingester tests (18)
-│   ├── test_parsing.py        # Parser tests (14)
-│   └── test_orchestrator.py   # Integration tests (6)
-├── main.py                    # Entry point
-├── pyproject.toml             # Dependencies & config
-└── .env                       # Credentials (not committed)
-```
 
 ## Installation
 
 ```bash
-# Clone the repository
 git clone <repo-url>
 cd poly-event-sniper
-
-# Install dependencies with uv
 uv sync
-
-# Copy environment template
-cp .env.example .env
 ```
+
+## Quick Start
+
+```bash
+# Run with TUI (recommended)
+uv run python main.py --tui
+
+# Demo mode (fake data, no connections)
+uv run python main.py --demo
+
+# Headless mode
+uv run python main.py
+```
+
+On first launch, the TUI will prompt you to **create a wallet**. No need to export private keys from MetaMask - Aedes creates and encrypts wallets internally using Ethereum keystore format.
 
 ## Configuration
 
-Edit `.env` with your Polymarket credentials:
+Create `.env` for optional settings (wallet is managed in-app):
 
 ```bash
-# Polygon Network
-POLYGON_PRIVATE_KEY=your_private_key_here
-POLYGON_RPC_URL=https://polygon-rpc.com
-
-# Polymarket CLOB API
-CLOB_API_KEY=your_api_key_here
-CLOB_API_SECRET=your_api_secret_here
-CLOB_API_PASSPHRASE=your_passphrase_here
-
 # Bot Configuration
 BOT_DRY_RUN=true                    # Set to false for live trading
 BOT_MAX_POSITION_SIZE=1000.0        # Maximum position size in USDC
 
-# Ingester Configuration
-INGESTER_RECONNECT_ATTEMPTS=5
-INGESTER_HEARTBEAT_INTERVAL=30.0
+# Optional: RPC URL (defaults to public endpoint)
+POLYGON_RPC_URL=https://polygon-rpc.com
 
-# Parser Configuration
-PARSER_DEFAULT_COOLDOWN_SECONDS=60.0
+# Optional: Pre-existing CLOB credentials (auto-derived if empty)
+CLOB_API_KEY=
+CLOB_API_SECRET=
+CLOB_API_PASSPHRASE=
 ```
 
-## Usage
+**Note:** CLOB API credentials are automatically derived from your wallet's private key. You don't need to manually configure them.
 
-### Configure Trading Rules
+## TUI Layout
 
-Edit `main.py` to add your threshold rules:
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ AEDES  ● Connected  DRY RUN    │  Wallet: 0x1234...5678 $42.50       │
+├────────────────────────────────┬─────────────────────────────────────┤
+│                                │ STRATEGIES                          │
+│       LOG PANEL                │ Threshold: 1 / Keyword: 1           │
+│       (live feed)              │ METRICS                             │
+│                                │ Events: 0 / Signals: 0 / Trades: 0  │
+│                                ├─────────────────────────────────────┤
+│                                │ RECENT TRADES                       │
+│                                │ (none)                              │
+├────────────────────────────────┴─────────────────────────────────────┤
+│ q Quit  c Clear  u Lock/Unlock                                       │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+**Key bindings:**
+- `q` - Quit
+- `c` - Clear logs
+- `u` - Lock/Unlock wallet
+
+## Trading Rules
+
+Edit `main.py` to configure your trading rules:
 
 ```python
-def load_rules() -> list[ThresholdRule]:
-    return [
-        # BUY when probability drops below 30%
-        ThresholdRule(
-            token_id="21742633143463906290569050155826241533067272736897614950488156847949938836455",
-            trigger_side=Side.BUY,
-            threshold=0.30,
-            comparison="below",
-            size_usdc=100.0,
-            reason_template="BUY: probability dropped below {threshold}",
-            cooldown_seconds=60.0,
-        ),
-        # SELL when probability rises above 70%
-        ThresholdRule(
-            token_id="21742633143463906290569050155826241533067272736897614950488156847949938836455",
-            trigger_side=Side.SELL,
-            threshold=0.70,
-            comparison="above",
-            size_usdc=50.0,
-            reason_template="SELL: probability rose above {threshold}",
-            cooldown_seconds=60.0,
-        ),
-    ]
+# Price threshold rule
+ThresholdRule(
+    token_id="7276...",
+    trigger_side=Side.BUY,
+    threshold=0.30,
+    comparison="below",
+    size_usdc=2.0,
+    cooldown_seconds=300.0,
+)
+
+# Keyword rule (news-driven)
+KeywordRule(
+    keyword="Bitcoin",
+    token_id="7276...",
+    trigger_side=Side.BUY,
+    size_usdc=1.5,
+    cooldown_seconds=600.0,
+)
 ```
 
-### Run the Bot
+## Tests
 
 ```bash
-# Run in dry-run mode (default)
-uv run python main.py
-
-# Logs are written to logs/ directory
-```
-
-## User Interface
-
-The bot includes a terminal-based user interface (TUI) built with Textual for real-time monitoring.
-
-### Run TUI (Live Mode)
-```bash
-uv run python -m src.tui.app
-```
-
-### Run TUI (Demo Mode)
-Simulate market events and trades without connecting to APIs:
-```bash
-uv run python -m src.tui.app --demo
-```
-
-Key bindings:
-- `q`: Quit application
-- `c`: Clear logs
-
-## Run Tests
-
-```bash
-# Run all tests
-uv run pytest
-
-# Run with verbose output
-uv run pytest -v
-
-# Run specific test file
-uv run pytest tests/test_parsing.py
-
-# Run with coverage
-uv run pytest --cov=src
-```
-
-### Type Checking
-
-```bash
-uv run mypy src/ main.py
-```
-
-## Architecture
-
-### Domain Models
-
-All models are immutable (frozen) Pydantic models for thread safety:
-
-- **TradeSignal**: Trading instruction (token_id, side, size_usdc, reason)
-- **ExecutionResult**: Order result (order_id, status, filled_price, fees)
-- **MarketEvent**: Raw market data from WebSocket
-- **ThresholdRule**: Trading rule configuration
-
-### Interfaces (ABCs)
-
-The system uses abstract base classes for extensibility:
-
-- **BaseIngester**: Async generator yielding `MarketEvent`
-- **BaseParser**: Evaluates events, returns `TradeSignal | None`
-- **BaseExecutor**: Executes signals, returns `ExecutionResult`
-
-### Exception Hierarchy
-
-```
-ExecutorError
-├── AuthenticationError
-├── ExecutionError
-├── OrderBookError
-├── PriceValidationError
-├── PositionSizeError
-└── RateLimitError
-
-IngestionError
-├── ConnectionError
-├── SubscriptionError
-└── ReconnectionExhaustedError
-
-ParserError
-├── InvalidEventError
-└── RuleConfigurationError
+uv run pytest           # Run all 319 tests
+uv run pytest -v        # Verbose output
+uv run mypy src/        # Type checking
 ```
 
 ## Safety Features
@@ -246,49 +133,25 @@ ParserError
 | Feature | Description |
 |---------|-------------|
 | Dry-run mode | Default on, logs trades without executing |
-| Position limits | Configurable max position size (default 1000 USDC) |
+| Position limits | Configurable max size (default 1000 USDC) |
 | Rate limiting | 100ms minimum between API calls |
-| Spread validation | Rejects trades in illiquid markets (>50% spread) |
-| Price bounds | Validates prices are within 0.01-0.99 range |
-| Auto-reconnect | Exponential backoff on WebSocket disconnection |
+| Spread validation | Rejects illiquid markets (>50% spread) |
+| Encrypted wallet | Ethereum keystore encryption (same as MetaMask) |
 
-## Development
-
-### Adding a New Ingester
-
-```python
-from src.interfaces.ingester import BaseIngester
-from src.models import MarketEvent
-
-class TwitterIngester(BaseIngester):
-    async def connect(self) -> None: ...
-    async def disconnect(self) -> None: ...
-    async def subscribe(self, token_ids: list[str]) -> None: ...
-    async def stream(self) -> AsyncIterator[MarketEvent]: ...
-    @property
-    def is_connected(self) -> bool: ...
-```
-
-### Adding a New Parser
-
-```python
-from src.interfaces.parser import BaseParser
-from src.models import MarketEvent, TradeSignal
-
-class SentimentParser(BaseParser):
-    def evaluate(self, event: MarketEvent) -> TradeSignal | None: ...
-    def reset(self) -> None: ...
-```
-
-## Test Coverage
+## Project Structure
 
 ```
-tests/test_execution.py     33 tests  (executor, validation, models)
-tests/test_ingestion.py     18 tests  (WebSocket parsing, connection)
-tests/test_parsing.py       14 tests  (threshold logic, cooldowns)
-tests/test_orchestrator.py   6 tests  (pipeline integration)
-─────────────────────────────────────
-Total                       71 tests
+src/
+├── tui/                 # Terminal UI (Textual)
+│   ├── app.py           # Main application
+│   └── widgets/         # UI components
+├── wallet/              # Wallet management
+├── executors/           # Trade execution
+├── ingesters/           # Data sources (WS, RSS)
+├── parsers/             # Signal generation
+├── discovery/           # Market discovery (Gamma API)
+├── managers/            # Portfolio, subscriptions
+└── persistence/         # SQLite + JSONL logging
 ```
 
 ## License
@@ -297,4 +160,4 @@ MIT
 
 ## Disclaimer
 
-This software is for educational purposes only. Trading prediction markets involves significant risk. Use at your own risk. Always test thoroughly in dry-run mode before enabling live trading.
+This software is for educational purposes only. Trading prediction markets involves significant risk. Use at your own risk. Always test in dry-run mode before enabling live trading.
